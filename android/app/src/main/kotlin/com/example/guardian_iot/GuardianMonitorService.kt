@@ -154,7 +154,7 @@ class GuardianMonitorService : Service(), SensorEventListener {
 
     private fun sendAlert() {
         if (!automatic || contacts.isEmpty()) {
-            updateMonitorNotification("Posible caída · revisa Guardian IoT")
+            updateMonitorNotification("Posible caída · revisa TzindaApp")
             return
         }
         val location = getLastLocationText()
@@ -174,7 +174,7 @@ class GuardianMonitorService : Service(), SensorEventListener {
                 } else {
                     val sms = getSmsManager()
                     val greeting = if (contact.name.isBlank()) "Hola" else "Hola ${contact.name}"
-                    val body = "$greeting, Guardian IoT detectó un patrón compatible con una posible caída. Verifica cómo estoy. $location"
+                    val body = "$greeting, TzindaApp detectó un patrón compatible con una posible caída. Verifica cómo estoy. $location"
                     val parts = sms.divideMessage(body)
                     val callbacks = ArrayList<PendingIntent>(parts.size)
                     expectedPartsForContact = parts.size
@@ -294,7 +294,7 @@ class GuardianMonitorService : Service(), SensorEventListener {
     private fun postSmsStatusNotification(message: String, error: Boolean) {
         val notification = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle(if (error) "Guardian IoT · revisar SMS" else "Guardian IoT · alerta enviada")
+            .setContentTitle(if (error) "TzindaApp · revisar SMS" else "TzindaApp · alerta enviada")
             .setContentText(message)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -402,7 +402,7 @@ class GuardianMonitorService : Service(), SensorEventListener {
 
     private fun monitorNotification(text: String): Notification = NotificationCompat.Builder(this, MONITOR_CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_launcher)
-        .setContentTitle("Guardian IoT · monitoreo")
+        .setContentTitle("TzindaApp · monitoreo")
         .setContentText(text)
         .setContentIntent(appPendingIntent())
         .setOngoing(true)
@@ -413,7 +413,7 @@ class GuardianMonitorService : Service(), SensorEventListener {
     private fun postAlertNotification(text: String, showCancel: Boolean, offerCalls: Boolean = false) {
         val builder = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle(if (showCancel) "Guardian IoT · ¿estás bien?" else "Guardian IoT · alerta")
+            .setContentTitle(if (showCancel) "TzindaApp · ¿estás bien?" else "TzindaApp · alerta")
             .setContentText(text)
             .setContentIntent(appPendingIntent(markFallPending = showCancel))
             .setCategory(NotificationCompat.CATEGORY_ALARM)
@@ -452,7 +452,7 @@ class GuardianMonitorService : Service(), SensorEventListener {
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            val monitor = NotificationChannel(MONITOR_CHANNEL_ID, "Monitoreo Guardian IoT", NotificationManager.IMPORTANCE_LOW).apply {
+            val monitor = NotificationChannel(MONITOR_CHANNEL_ID, "Monitoreo TzindaApp", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "Indica que el acelerómetro está monitoreando en segundo plano"
             }
             val alert = NotificationChannel(ALERT_CHANNEL_ID, "Alertas de posible caída", NotificationManager.IMPORTANCE_HIGH).apply {
@@ -555,7 +555,7 @@ class SmsStatusReceiver : BroadcastReceiver() {
         android.util.Log.i("GuardianIoT", "$message · parte $part/$parts")
         val notification = NotificationCompat.Builder(context, "guardian_fall_alarm")
             .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle(if (failed) "Guardian IoT · SMS no enviado" else "Guardian IoT · SMS procesado")
+            .setContentTitle(if (failed) "TzindaApp · SMS no enviado" else "TzindaApp · SMS procesado")
             .setContentText(if (parts > 1) "$message · parte $part/$parts" else message)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

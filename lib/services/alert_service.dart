@@ -5,12 +5,16 @@ class Alerts {
 
   static Future<void> initialize() async {
     const android = AndroidInitializationSettings('@drawable/ic_launcher');
-    await _plugin.initialize(settings: const InitializationSettings(android: android));
+    await _plugin.initialize(
+      settings: const InitializationSettings(android: android),
+    );
   }
 
   static Future<void> requestPermission() async {
     await _plugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
         ?.requestNotificationsPermission();
   }
 
@@ -19,7 +23,7 @@ class Alerts {
       android: AndroidNotificationDetails(
         'guardian_alerts',
         'Alertas Guardian',
-        channelDescription: 'Avisos locales de Guardian IoT',
+        channelDescription: 'Avisos locales de TzindaApp',
         importance: Importance.max,
         priority: Priority.high,
         category: AndroidNotificationCategory.alarm,
@@ -27,7 +31,7 @@ class Alerts {
     );
     await _plugin.show(
       id: 1001,
-      title: automatic ? 'Guardian IoT · alerta' : 'Guardian IoT · prueba',
+      title: automatic ? 'TzindaApp · alerta' : 'TzindaApp · prueba',
       body: automatic
           ? 'Se preparó una alerta. Revisa el mensaje para tu contacto.'
           : 'Prueba de alerta solicitada.',
