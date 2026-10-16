@@ -13,64 +13,71 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.location.LocationManager
+import android.media.AudioAttributes
+import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.telecom.TelecomManager
+import android.telephony.PhoneStateListener
 import android.telephony.SmsManager
-import android.net.Uri
+import android.telephony.TelephonyManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import org.json.JSONArray
 import kotlin.math.sqrt
 
 class GuardianMonitorService : Service(), SensorEventListener {
+    private data class Contact(val name: String, val phone: String)
+
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var sensorManager: SensorManager
+    private var contacts: List<Contact> = emptyList()
+    private var automatic = false
     private var impactAt = 0L
     private var lastTrigger = 0L
     private var peak = 0.0
     private var secondsLeft = 20
     private var alertPending = false
-    private var contactName = ""
-    private var contactPhone = ""
-    private var automatic = false
+    private var callTargets: List<Contact> = emptyList()
+    private var callIndex = 0
+    private var callInProgress = false
+    private var observedCallState = false
+    private var phoneListener: PhoneStateListener? = null
 
     override fun onCreate() {
         super.onCreate()
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
-        createNotificationChannel()
+        createNotificationChannels()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action ?: ACTION_START
-        when (action) {
+        when (intent?.action) {
             ACTION_STOP -> { stopMonitoring(); return START_NOT_STICKY }
             ACTION_CANCEL_ALERT -> { cancelAlert(); return START_STICKY }
-            ACTION_START -> {
-                val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                if (intent != null) {
-                    contactName = intent.getStringExtra(EXTRA_NAME).orEmpty()
-                    contactPhone = intent.getStringExtra(EXTRA_PHONE).orEmpty()
-                    automatic = intent.getBooleanExtra(EXTRA_AUTOMATIC, false)
-                    prefs.edit().putString(EXTRA_NAME, contactName).putString(EXTRA_PHONE, contactPhone)
-                        .putBoolean(EXTRA_AUTOMATIC, automatic).apply()
-                } else {
-                    contactName = prefs.getString(EXTRA_NAME, "").orEmpty()
-                    contactPhone = prefs.getString(EXTRA_PHONE, "").orEmpty()
-                    automatic = prefs.getBoolean(EXTRA_AUTOMATIC, false)
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(NOTIFICATION_ID, notification("Acelerómetro activo", false), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-                } else {
-                    startForeground(NOTIFICATION_ID, notification("Acelerómetro activo", false))
-                }
-                isRunning = true
-                val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
-                    ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-                sensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
-                return START_STICKY
-            }
         }
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        if (intent?.hasExtra(EXTRA_CONTACTS) == true) {
+            contacts = parseContacts(intent.getStringExtra(EXTRA_CONTACTS).orEmpty())
+            automatic = intent.getBooleanExtra(EXTRA_AUTOMATIC, false)
+            prefs.edit().putString(EXTRA_CONTACTS, toJson(contacts)).putBoolean(EXTRA_AUTOMATIC, automatic)
+                .putBoolean(PREF_MONITOR_ENABLED, true).apply()
+        } else {
+            contacts = parseContacts(prefs.getString(EXTRA_CONTACTS, "[]").orEmpty())
+            automatic = prefs.getBoolean(EXTRA_AUTOMATIC, false)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, monitorNotification("Acelerómetro activo"), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, monitorNotification("Acelerómetro activo"))
+        }
+        isRunning = true
+        val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+            ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        sensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
+        if (getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).getBoolean(FLUTTER_PENDING_KEY, false)) beginCountdown()
         return START_STICKY
     }
 
@@ -100,7 +107,10 @@ class GuardianMonitorService : Service(), SensorEventListener {
         if (alertPending) return
         alertPending = true
         secondsLeft = 20
-        updateNotification("Posible caída · confirma en $secondsLeft s", true)
+        getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit().putBoolean(FLUTTER_PENDING_KEY, true).apply()
+        postAlertNotification("Posible caída · ¿estás bien? $secondsLeft s", showCancel = true)
+        updateMonitorNotification("Posible caída · revisión de 20 segundos")
+        handler.removeCallbacks(countdownTick)
         handler.post(countdownTick)
     }
 
@@ -110,9 +120,11 @@ class GuardianMonitorService : Service(), SensorEventListener {
             secondsLeft--
             if (secondsLeft <= 0) {
                 alertPending = false
+                getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit().putBoolean(FLUTTER_PENDING_KEY, false).apply()
+                (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(ALERT_NOTIFICATION_ID)
                 sendAlert()
             } else {
-                updateNotification("Posible caída · confirma en $secondsLeft s", true)
+                postAlertNotification("Posible caída · ¿estás bien? $secondsLeft s", showCancel = true)
                 handler.postDelayed(this, 1_000L)
             }
         }
@@ -122,43 +134,120 @@ class GuardianMonitorService : Service(), SensorEventListener {
         if (!alertPending) return
         alertPending = false
         handler.removeCallbacks(countdownTick)
-        updateNotification("Monitoreo activo · alerta cancelada", false)
+        getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit().putBoolean(FLUTTER_PENDING_KEY, false).apply()
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(ALERT_NOTIFICATION_ID)
+        updateMonitorNotification("Monitoreo activo · alerta cancelada")
     }
 
     private fun sendAlert() {
-        if (!automatic || contactPhone.isBlank()) {
-            updateNotification("Posible caída · abre Guardian IoT", false)
+        if (!automatic || contacts.isEmpty()) {
+            updateMonitorNotification("Posible caída · revisa Guardian IoT")
             return
         }
         val location = getLastLocationText()
-        val greeting = if (contactName.isBlank()) "Hola" else "Hola $contactName"
-        val body = "$greeting, Guardian IoT detectó un patrón compatible con una posible caída. Verifica cómo estoy. $location"
-        var smsSent = false
-        try {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED) {
-                val sms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) getSystemService(SmsManager::class.java) else @Suppress("DEPRECATION") SmsManager.getDefault()
-                val parts = sms.divideMessage(body)
-                sms.sendMultipartTextMessage(contactPhone, null, parts, null, null)
-                smsSent = true
-            }
-        } catch (_: Exception) { }
-        updateNotification(if (smsSent) "SMS solicitado · intentando llamada" else "No se pudo enviar SMS · intentando llamada", false)
-        handler.postDelayed({ placeCall() }, 1_500L)
+        var sent = 0
+        var failed = 0
+        contacts.forEach { contact ->
+            try {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+                    failed++
+                } else {
+                    @Suppress("DEPRECATION")
+                    val sms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) getSystemService(SmsManager::class.java) else SmsManager.getDefault()
+                    val greeting = if (contact.name.isBlank()) "Hola" else "Hola ${contact.name}"
+                    val body = "$greeting, Guardian IoT detectó un patrón compatible con una posible caída. Verifica cómo estoy. $location"
+                    sms.sendMultipartTextMessage(contact.phone, null, sms.divideMessage(body), null, null)
+                    sent++
+                }
+            } catch (_: Exception) { failed++ }
+        }
+        updateMonitorNotification("SMS solicitados: $sent · errores: $failed")
+        startCallSequence()
     }
 
-    private fun placeCall() {
+    private fun startCallSequence() {
+        callTargets = contacts.take(2)
+        callIndex = 0
+        callInProgress = false
+        observedCallState = false
+        if (callTargets.isEmpty()) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
+            val telephony = getSystemService(TELEPHONY_SERVICE) as TelephonyManager
+            phoneListener = object : PhoneStateListener() {
+                override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                    if (state != TelephonyManager.CALL_STATE_IDLE) {
+                        observedCallState = true
+                        callInProgress = true
+                    } else if (callInProgress && observedCallState) {
+                        callInProgress = false
+                        observedCallState = false
+                        handler.removeCallbacks(callStateTimeout)
+                        handler.postDelayed({ placeNextCall() }, 2_000L)
+                    }
+                }
+            }
+            @Suppress("DEPRECATION")
+            telephony.listen(phoneListener, PhoneStateListener.LISTEN_CALL_STATE)
+        }
+        placeNextCall()
+    }
+
+    private val callStateTimeout = object : Runnable {
+        override fun run() {
+            if (callIndex >= callTargets.size || !callInProgress) return
+            val canReadState = ContextCompat.checkSelfPermission(this@GuardianMonitorService, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+            val telephony = getSystemService(TELEPHONY_SERVICE) as TelephonyManager
+            if (!canReadState) {
+                stopPhoneStateListener()
+                postAlertNotification("Se intentó una llamada · toca para llamar a los contactos", showCancel = false, offerCalls = true)
+            } else if (telephony.callState == TelephonyManager.CALL_STATE_IDLE) {
+                callInProgress = false
+                observedCallState = false
+                placeNextCall()
+            } else {
+                handler.postDelayed(this, 30_000L)
+            }
+        }
+    }
+
+    private fun placeNextCall() {
+        if (callIndex >= callTargets.size) {
+            stopPhoneStateListener()
+            postAlertNotification("Avisos enviados · llamadas intentadas", showCancel = false, offerCalls = true)
+            return
+        }
+        val contact = callTargets[callIndex++]
         try {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-                updateNotification("SMS solicitado · toca para abrir la llamada", false, true)
+                stopPhoneStateListener()
+                postAlertNotification("SMS enviados · falta permiso para llamar", showCancel = false, offerCalls = true)
                 return
             }
-            val call = Intent(Intent.ACTION_CALL, Uri.fromParts("tel", contactPhone, null))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(call)
-            updateNotification("SMS solicitado · intento de llamada realizado", false, true)
+            callInProgress = true
+            observedCallState = false
+            val telecom = getSystemService(TELECOM_SERVICE) as TelecomManager
+            telecom.placeCall(Uri.fromParts("tel", contact.phone, null), null)
+            updateMonitorNotification("Llamando a ${contact.name.ifBlank { contact.phone }}")
+            handler.removeCallbacks(callStateTimeout)
+            handler.postDelayed(callStateTimeout, 90_000L)
         } catch (_: Exception) {
-            updateNotification("SMS solicitado · Android requiere tocar para llamar", false, true)
+            callInProgress = false
+            if (callIndex < callTargets.size) handler.postDelayed({ placeNextCall() }, 3_000L)
+            else {
+                stopPhoneStateListener()
+                postAlertNotification("SMS enviados · no se pudo iniciar la llamada", showCancel = false, offerCalls = true)
+            }
         }
+    }
+
+    private fun stopPhoneStateListener() {
+        handler.removeCallbacks(callStateTimeout)
+        if (phoneListener != null && ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
+            @Suppress("DEPRECATION")
+            (getSystemService(TELEPHONY_SERVICE) as TelephonyManager).listen(phoneListener, PhoneStateListener.LISTEN_NONE)
+        }
+        phoneListener = null
+        callInProgress = false
     }
 
     private fun getLastLocationText(): String {
@@ -166,50 +255,96 @@ class GuardianMonitorService : Service(), SensorEventListener {
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) return "Ubicación no disponible."
         return try {
             val manager = getSystemService(LOCATION_SERVICE) as LocationManager
-            val location = manager.getProviders(true).asSequence().mapNotNull { manager.getLastKnownLocation(it) }
-                .maxByOrNull { it.time }
+            val location = manager.getProviders(true).asSequence().mapNotNull { manager.getLastKnownLocation(it) }.maxByOrNull { it.time }
             if (location == null) "Ubicación no disponible." else "Ubicación aproximada: https://maps.google.com/?q=${location.latitude},${location.longitude}"
         } catch (_: Exception) { "Ubicación no disponible." }
     }
 
-    private fun notification(text: String, cancelable: Boolean, offerCall: Boolean = false): Notification {
-        val openIntent = packageManager.getLaunchIntentForPackage(packageName)
-        val contentPending = openIntent?.let { PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE) }
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+    private fun monitorNotification(text: String): Notification = NotificationCompat.Builder(this, MONITOR_CHANNEL_ID)
+        .setSmallIcon(R.drawable.ic_launcher)
+        .setContentTitle("Guardian IoT · monitoreo")
+        .setContentText(text)
+        .setContentIntent(appPendingIntent())
+        .setOngoing(true)
+        .setOnlyAlertOnce(true)
+        .setPriority(NotificationCompat.PRIORITY_LOW)
+        .build()
+
+    private fun postAlertNotification(text: String, showCancel: Boolean, offerCalls: Boolean = false) {
+        val builder = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle("Guardian IoT · monitoreo")
+            .setContentTitle(if (showCancel) "Guardian IoT · ¿estás bien?" else "Guardian IoT · alerta")
             .setContentText(text)
-            .setContentIntent(contentPending)
-            .setOngoing(true)
+            .setContentIntent(appPendingIntent(markFallPending = showCancel))
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(!showCancel)
+            .setOngoing(showCancel)
             .setOnlyAlertOnce(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-        if (cancelable) {
+        appPendingIntent(markFallPending = showCancel)?.let { builder.setFullScreenIntent(it, true) }
+        if (showCancel) {
             val cancelIntent = Intent(this, GuardianMonitorService::class.java).setAction(ACTION_CANCEL_ALERT)
-            val pending = PendingIntent.getService(this, 2, cancelIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            builder.addAction(0, "Estoy bien", pending)
+            val cancelPending = PendingIntent.getService(this, 2, cancelIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            builder.addAction(0, "Estoy bien", cancelPending)
         }
-        if (offerCall && contactPhone.isNotBlank()) {
-            val callIntent = Intent(Intent.ACTION_CALL, Uri.fromParts("tel", contactPhone, null))
-            val callPending = PendingIntent.getActivity(this, 3, callIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            builder.addAction(0, "Llamar", callPending)
+        if (offerCalls) {
+            callTargets.take(2).forEachIndexed { index, contact ->
+                val callIntent = Intent(Intent.ACTION_CALL, Uri.fromParts("tel", contact.phone, null))
+                val callPending = PendingIntent.getActivity(this, 30 + index, callIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                builder.addAction(0, "Llamar ${index + 1}", callPending)
+            }
         }
-        return builder.build()
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(ALERT_NOTIFICATION_ID, builder.build())
     }
 
-    private fun updateNotification(text: String, cancelable: Boolean, offerCall: Boolean = false) {
-        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text, cancelable, offerCall))
+    private fun appPendingIntent(markFallPending: Boolean = false): PendingIntent? {
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: return null
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        if (markFallPending) launchIntent.putExtra(EXTRA_FALL_ALERT, true)
+        return PendingIntent.getActivity(this, if (markFallPending) 4 else 0, launchIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
-    private fun createNotificationChannel() {
+    private fun updateMonitorNotification(text: String) {
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, monitorNotification(text))
+    }
+
+    private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "Monitoreo Guardian IoT", NotificationManager.IMPORTANCE_HIGH)
-            channel.description = "Indica que el acelerómetro está monitoreando en segundo plano"
-            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
+            val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            val monitor = NotificationChannel(MONITOR_CHANNEL_ID, "Monitoreo Guardian IoT", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Indica que el acelerómetro está monitoreando en segundo plano"
+            }
+            val alert = NotificationChannel(ALERT_CHANNEL_ID, "Alertas de posible caída", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Alarma sonora y vibración para confirmar si la persona está bien"
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 700, 250, 700, 250, 1000)
+                setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM), AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build())
+            }
+            manager.createNotificationChannel(monitor)
+            manager.createNotificationChannel(alert)
         }
     }
+
+    private fun parseContacts(json: String): List<Contact> = try {
+        val array = JSONArray(json)
+        (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val phone = item.optString("phone").trim()
+            if (phone.isBlank()) null else Contact(item.optString("name").trim(), phone)
+        }.take(5)
+    } catch (_: Exception) { emptyList() }
+
+    private fun toJson(list: List<Contact>): String = JSONArray().apply {
+        list.forEach { contact -> put(org.json.JSONObject().put("name", contact.name).put("phone", contact.phone)) }
+    }.toString()
 
     private fun stopMonitoring() {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_MONITOR_ENABLED, false).apply()
         handler.removeCallbacksAndMessages(null)
+        getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit().putBoolean(FLUTTER_PENDING_KEY, false).apply()
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(ALERT_NOTIFICATION_ID)
+        stopPhoneStateListener()
         sensorManager.unregisterListener(this)
         isRunning = false
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -218,6 +353,7 @@ class GuardianMonitorService : Service(), SensorEventListener {
 
     override fun onDestroy() {
         sensorManager.unregisterListener(this)
+        stopPhoneStateListener()
         isRunning = false
         super.onDestroy()
     }
@@ -230,12 +366,17 @@ class GuardianMonitorService : Service(), SensorEventListener {
         const val ACTION_START = "com.example.guardian_iot.START"
         const val ACTION_STOP = "com.example.guardian_iot.STOP"
         const val ACTION_CANCEL_ALERT = "com.example.guardian_iot.CANCEL_ALERT"
-        const val EXTRA_NAME = "contactName"
-        const val EXTRA_PHONE = "contactPhone"
+        const val EXTRA_CONTACTS = "contactsJson"
         const val EXTRA_AUTOMATIC = "automatic"
-        private const val CHANNEL_ID = "guardian_monitor"
-        private const val PREFS_NAME = "guardian_monitor_settings"
+        const val EXTRA_FALL_ALERT = "fall_alert"
+        const val PREFS_NAME = "guardian_monitor_settings"
+        const val PREF_MONITOR_ENABLED = "monitor_enabled"
+        private const val FLUTTER_PREFS = "FlutterSharedPreferences"
+        private const val FLUTTER_PENDING_KEY = "flutter.fall_pending"
+        private const val MONITOR_CHANNEL_ID = "guardian_monitor_v2"
+        private const val ALERT_CHANNEL_ID = "guardian_fall_alarm"
         private const val NOTIFICATION_ID = 2001
+        private const val ALERT_NOTIFICATION_ID = 2002
         private const val COOLDOWN_MS = 45_000L
     }
 }
