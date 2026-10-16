@@ -1,11 +1,13 @@
 package com.example.guardian_iot
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -50,8 +52,13 @@ class MainActivity : FlutterActivity() {
                     } else result.success(true)
                 }
                 "isMonitoring" -> result.success(GuardianMonitorService.isRunning)
+                "alertPermissionStatus" -> result.success(mapOf(
+                    "sms" to (ContextCompat.checkSelfPermission(this, android.Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED),
+                    "call" to (ContextCompat.checkSelfPermission(this, android.Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED),
+                    "phoneState" to (ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED),
+                ))
 
-                // ---- Servidor Guardian (backend/) ----
+                // ---- Servidor TzindaApp (backend/) ----
                 "apiStatus" -> result.success(GuardianApi(this).status())
                 "configureApi" -> {
                     val url = call.argument<String>("baseUrl").orEmpty()
@@ -72,7 +79,8 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "createInvite" -> background(result) {
-                    val res = GuardianApi(this).createInvite() ?: error(GuardianApi(this).status()["lastError"] ?: "Sin respuesta del servidor")
+                    val api = GuardianApi(this)
+                    val res = api.createInvite() ?: error(api.status()["lastError"] ?: "Sin respuesta del servidor")
                     mapOf("code" to res.optString("code"), "expiresAt" to res.optString("expiresAt"))
                 }
                 "disconnectApi" -> {

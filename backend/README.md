@@ -1,6 +1,6 @@
-# Guardian IoT · servidor
+# TzindaApp · servidor
 
-API del prototipo Guardian IoT. Documentación de cada endpoint: [`../docs/API.md`](../docs/API.md).
+API del prototipo TzindaApp (antes Guardian IoT). Documentación de cada endpoint: [`../docs/API.md`](../docs/API.md).
 
 ## Requisitos
 
@@ -17,12 +17,12 @@ npm start
 Al arrancar muestra las direcciones disponibles:
 
 ```
-Guardian IoT API lista
+TzindaApp API lista
   Local:      http://localhost:8080
   En tu red:  http://192.168.1.50:8080   ← pon esta URL en la app del teléfono
 ```
 
-En la app: **Ajustes → Servidor Guardian (opcional)** → escribe esa URL y el nombre de la persona → **Conectar**. La laptop y el teléfono deben estar en la misma red Wi-Fi. Si no conecta, revisa que el Firewall de Windows permita Node.js en redes privadas.
+En la app: **Ajustes → Servidor TzindaApp (opcional)** → escribe esa URL y el nombre de la persona → **Conectar**. La laptop y el teléfono deben estar en la misma red Wi-Fi. Si no conecta, revisa que el Firewall de Windows permita Node.js en redes privadas.
 
 Configuración opcional: copia `.env.example` como `.env` (ver comentarios dentro).
 

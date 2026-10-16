@@ -28,7 +28,7 @@ app.listen(config.port, '0.0.0.0', () => {
     .flat()
     .filter((i) => i && i.family === 'IPv4' && !i.internal)
     .map((i) => `http://${i.address}:${config.port}`);
-  console.log('Guardian IoT API lista');
+  console.log('TzindaApp API lista');
   console.log(`  Local:      http://localhost:${config.port}`);
   for (const url of lan) console.log(`  En tu red:  ${url}   ← pon esta URL en la app del teléfono`);
   if (config.publicUrl) console.log(`  Pública:    ${config.publicUrl}`);

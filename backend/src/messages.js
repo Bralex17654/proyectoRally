@@ -6,8 +6,8 @@ const who = (name) => (name?.trim() ? name.trim() : 'la persona protegida');
 export const messages = {
   alert: (alert, url) =>
     alert.type === 'sos'
-      ? `🆘 GUARDIAN IoT: ${who(alert.personName)} pidió ayuda con el botón SOS. Mapa y "Voy en camino": ${url}`
-      : `🚨 GUARDIAN IoT: posible caída de ${who(alert.personName)}. Mapa y "Voy en camino": ${url}`,
+      ? `🆘 TzindaApp: ${who(alert.personName)} pidió ayuda con el botón SOS. Mapa y "Voy en camino": ${url}`
+      : `🚨 TzindaApp: posible caída de ${who(alert.personName)}. Mapa y "Voy en camino": ${url}`,
   ack: (alert, name, url) => `✅ ${name} va en camino con ${who(alert.personName)}. ${url}`,
   resolved: (alert, reason, by) =>
     `💚 Se cerró la alerta de ${who(alert.personName)}: ${reasonLabel[reason] ?? reason}${by ? ` (${by})` : ''}.`,

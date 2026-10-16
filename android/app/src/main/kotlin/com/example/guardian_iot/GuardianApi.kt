@@ -9,7 +9,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Cliente de la API de Guardian IoT (carpeta backend/ del repositorio).
+ * Cliente de la API de TzindaApp (carpeta backend/ del repositorio).
  *
  * Es opcional: si no hay servidor configurado, la app funciona igual que antes
  * (SMS y llamadas desde el chip). Todas las llamadas son bloqueantes, así que

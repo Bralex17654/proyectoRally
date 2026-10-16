@@ -21,37 +21,97 @@ Future<void> main() async {
   runApp(const GuardianApp());
 }
 
-class GuardianApp extends StatelessWidget {
+class GuardianApp extends StatefulWidget {
   const GuardianApp({super.key});
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
-    title: 'Guardian IoT',
-    debugShowCheckedModeBanner: false,
-    theme: ThemeData(
+  State<GuardianApp> createState() => _GuardianAppState();
+}
+
+class _GuardianAppState extends State<GuardianApp> {
+  bool _darkMode = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadThemePreference();
+  }
+
+  Future<void> _loadThemePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted)
+      setState(() => _darkMode = prefs.getBool('dark_mode') ?? false);
+  }
+
+  Future<void> _setDarkMode(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('dark_mode', enabled);
+    if (mounted) setState(() => _darkMode = enabled);
+  }
+
+  ThemeData _buildTheme(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    final base = ColorScheme.fromSeed(seedColor: _teal, brightness: brightness);
+    final scheme = dark
+        ? base.copyWith(
+            primary: const Color(0xFF72D1C4),
+            surface: const Color(0xFF101918),
+            onSurface: const Color(0xFFE8F1EF),
+            onSurfaceVariant: const Color(0xFFB5C5C1),
+            secondaryContainer: const Color(0xFF24433D),
+            onSecondaryContainer: const Color(0xFFD9F3EE),
+            surfaceContainerLow: const Color(0xFF182321),
+            surfaceContainerHighest: const Color(0xFF263431),
+          )
+        : base.copyWith(
+            primary: _teal,
+            surface: _paper,
+            onSurface: _navy,
+            onSurfaceVariant: Colors.black54,
+            secondaryContainer: _mint,
+            onSecondaryContainer: _navy,
+            surfaceContainerLow: Colors.white,
+            surfaceContainerHighest: Colors.white,
+          );
+    return ThemeData(
       useMaterial3: true,
-      scaffoldBackgroundColor: _paper,
-      colorScheme: ColorScheme.fromSeed(seedColor: _teal, primary: _teal),
+      colorScheme: scheme,
+      scaffoldBackgroundColor: scheme.surface,
       fontFamily: 'Roboto',
-      appBarTheme: const AppBarTheme(
-        backgroundColor: _paper,
-        foregroundColor: _navy,
+      appBarTheme: AppBarTheme(
+        backgroundColor: scheme.surface,
+        foregroundColor: scheme.onSurface,
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: Colors.white,
+        fillColor: scheme.surfaceContainerHighest,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
           borderSide: BorderSide.none,
         ),
       ),
-    ),
-    home: const GuardianHome(),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    title: 'TzindaApp',
+    debugShowCheckedModeBanner: false,
+    theme: _buildTheme(Brightness.light),
+    darkTheme: _buildTheme(Brightness.dark),
+    themeMode: _darkMode ? ThemeMode.dark : ThemeMode.light,
+    home: GuardianHome(darkMode: _darkMode, onDarkModeChanged: _setDarkMode),
   );
 }
 
 class GuardianHome extends StatefulWidget {
-  const GuardianHome({super.key});
+  const GuardianHome({
+    super.key,
+    required this.darkMode,
+    required this.onDarkModeChanged,
+  });
+  final bool darkMode;
+  final ValueChanged<bool> onDarkModeChanged;
 
   @override
   State<GuardianHome> createState() => _GuardianHomeState();
@@ -105,7 +165,7 @@ class _GuardianHomeState extends State<GuardianHome>
 
   Future<void> _loadContact() async {
     final prefs = await SharedPreferences.getInstance();
-    // Un familiar puede cambiar los contactos desde el servidor Guardian.
+    // Un familiar puede cambiar los contactos desde el servidor TzindaApp.
     await prefs.reload();
     if (!mounted) return;
     setState(() {
@@ -269,9 +329,9 @@ class _GuardianHomeState extends State<GuardianHome>
     await prefs.setBool('automatic_actions', enabled);
     if (mounted) setState(() => _automaticActions = enabled);
     if (enabled && !_monitorActive) {
-      await _startMonitorService();
+      await _startMonitorService(skipPermissionRequest: true);
     } else if (_monitorActive) {
-      await _startMonitorService();
+      await _startMonitorService(skipPermissionRequest: true);
     }
   }
 
@@ -283,24 +343,63 @@ class _GuardianHomeState extends State<GuardianHome>
       if (requireAutomatic) Permission.sms,
       if (requireAutomatic) Permission.phone,
     ];
-    final permissionResults = await permissions.request();
-    if (requireAutomatic &&
-        (permissionResults[Permission.sms] != PermissionStatus.granted ||
-            permissionResults[Permission.phone] != PermissionStatus.granted)) {
-      if (mounted)
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Concede los permisos de SMS y teléfono para activar las alertas automáticas.',
-            ),
-          ),
+    await permissions.request();
+    if (requireAutomatic) {
+      try {
+        final status = await _monitorChannel.invokeMapMethod<String, bool>(
+          'alertPermissionStatus',
         );
-      return false;
+        final smsGranted = status?['sms'] == true;
+        final callsGranted = status?['call'] == true;
+        if (!smsGranted && !callsGranted) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Android no autorizó SMS ni llamadas. Activa al menos uno en Ajustes > Aplicaciones > TzindaApp > Permisos.',
+                ),
+              ),
+            );
+          }
+          return false;
+        }
+        if (!smsGranted && callsGranted && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              duration: Duration(seconds: 6),
+              content: Text(
+                'Android bloqueó SMS en esta instalación. Se activarán las llamadas al primer contacto como respaldo.',
+              ),
+            ),
+          );
+        } else if (smsGranted && !callsGranted && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'SMS activado. Android no autorizó llamadas automáticas.',
+              ),
+            ),
+          );
+        }
+      } on PlatformException catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'No se pudieron comprobar los permisos: ${error.message ?? error.code}',
+              ),
+            ),
+          );
+        }
+        return false;
+      }
     }
     return true;
   }
 
-  Future<void> _startMonitorService() async {
+  Future<void> _startMonitorService({
+    bool skipPermissionRequest = false,
+  }) async {
     if (_contacts.isEmpty) {
       if (mounted)
         ScaffoldMessenger.of(context).showSnackBar(
@@ -310,7 +409,7 @@ class _GuardianHomeState extends State<GuardianHome>
         );
       return;
     }
-    if (!await _requestAlertPermissions()) return;
+    if (!skipPermissionRequest && !await _requestAlertPermissions()) return;
     try {
       await _monitorChannel.invokeMethod('startMonitoring', {
         'contactsJson': jsonEncode(_contacts),
@@ -407,7 +506,7 @@ class _GuardianHomeState extends State<GuardianHome>
         : 'Ubicación aproximada: https://maps.google.com/?q=${_position!.latitude},${_position!.longitude}';
     final who = _contactName.isEmpty ? 'Hola' : 'Hola $_contactName';
     final body =
-        '$who, Guardian IoT detectó un patrón compatible con una posible caída. ¿Puedes verificar cómo estoy? $location';
+        '$who, TzindaApp detectó un patrón compatible con una posible caída. ¿Puedes verificar cómo estoy? $location';
     final uri = Uri(
       scheme: 'smsto',
       path: _contactPhone,
@@ -438,7 +537,7 @@ class _GuardianHomeState extends State<GuardianHome>
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
         onDestinationSelected: (value) => setState(() => _tab = value),
-        backgroundColor: Colors.white,
+        backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.shield_outlined),
@@ -454,6 +553,7 @@ class _GuardianHomeState extends State<GuardianHome>
 
   Widget _dashboard() {
     final isActive = _monitorActive;
+    final colors = Theme.of(context).colorScheme;
     return ListView(
       padding: const EdgeInsets.fromLTRB(22, 16, 22, 28),
       children: [
@@ -463,23 +563,23 @@ class _GuardianHomeState extends State<GuardianHome>
               width: 46,
               height: 46,
               decoration: BoxDecoration(
-                color: _mint,
+                color: colors.secondaryContainer,
                 borderRadius: BorderRadius.circular(15),
               ),
-              child: const Icon(Icons.health_and_safety, color: _teal),
+              child: Icon(Icons.health_and_safety, color: colors.primary),
             ),
             const SizedBox(width: 12),
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'GUARDIAN IoT',
+                    'TZINDAAPP',
                     style: TextStyle(
                       fontSize: 12,
                       letterSpacing: 1.5,
                       fontWeight: FontWeight.w800,
-                      color: _teal,
+                      color: colors.primary,
                     ),
                   ),
                   SizedBox(height: 2),
@@ -488,7 +588,7 @@ class _GuardianHomeState extends State<GuardianHome>
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w700,
-                      color: _navy,
+                      color: colors.onSurface,
                     ),
                   ),
                 ],
@@ -496,7 +596,7 @@ class _GuardianHomeState extends State<GuardianHome>
             ),
             IconButton(
               onPressed: () => setState(() => _tab = 2),
-              icon: const Icon(Icons.settings_outlined, color: _navy),
+              icon: Icon(Icons.settings_outlined, color: colors.onSurface),
             ),
           ],
         ),
@@ -618,7 +718,7 @@ class _GuardianHomeState extends State<GuardianHome>
         Container(
           padding: const EdgeInsets.all(17),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: colors.surfaceContainerLow,
             borderRadius: BorderRadius.circular(21),
           ),
           child: Row(
@@ -626,21 +726,21 @@ class _GuardianHomeState extends State<GuardianHome>
               Container(
                 width: 42,
                 height: 42,
-                decoration: const BoxDecoration(
-                  color: _mint,
+                decoration: BoxDecoration(
+                  color: colors.secondaryContainer,
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.people_outline, color: _teal),
+                child: Icon(Icons.people_outline, color: colors.primary),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'Contactos de confianza',
                       style: TextStyle(
-                        color: _navy,
+                        color: colors.onSurface,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -651,8 +751,8 @@ class _GuardianHomeState extends State<GuardianHome>
                           : '${_contacts.length} de 5 contactos configurados',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.black54,
+                      style: TextStyle(
+                        color: colors.onSurfaceVariant,
                         fontSize: 12,
                       ),
                     ),
@@ -667,202 +767,252 @@ class _GuardianHomeState extends State<GuardianHome>
           ),
         ),
         const SizedBox(height: 17),
-        const Text(
-          'Guardian IoT es un apoyo preventivo experimental. No sustituye atención médica ni servicios de emergencia.',
-          style: TextStyle(color: Colors.black54, fontSize: 12, height: 1.5),
+        Text(
+          'TzindaApp es un apoyo preventivo experimental. No sustituye atención médica ni servicios de emergencia.',
+          style: TextStyle(
+            color: colors.onSurfaceVariant,
+            fontSize: 12,
+            height: 1.5,
+          ),
         ),
       ],
     );
   }
 
-  Widget _infoCard(IconData icon, String title, String value, String detail) =>
-      Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(21),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, color: _teal, size: 22),
-            const SizedBox(height: 13),
-            Text(
-              title,
-              style: const TextStyle(color: Colors.black54, fontSize: 12),
+  Widget _infoCard(IconData icon, String title, String value, String detail) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(21),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: colors.primary, size: 22),
+          const SizedBox(height: 13),
+          Text(
+            title,
+            style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: colors.onSurface,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
             ),
-            const SizedBox(height: 3),
-            Text(
-              value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: _navy,
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 3),
-            Text(
-              detail,
-              style: const TextStyle(color: Colors.black45, fontSize: 11),
-            ),
-          ],
-        ),
-      );
+          ),
+          const SizedBox(height: 3),
+          Text(
+            detail,
+            style: TextStyle(color: colors.onSurfaceVariant, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
 
-  Widget _activity() => ListView(
-    padding: const EdgeInsets.fromLTRB(22, 28, 22, 28),
-    children: [
-      const Text(
-        'Actividad',
-        style: TextStyle(
-          color: _navy,
-          fontSize: 28,
-          fontWeight: FontWeight.w700,
+  Widget _activity() {
+    final colors = Theme.of(context).colorScheme;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(22, 28, 22, 28),
+      children: [
+        Text(
+          'Actividad',
+          style: TextStyle(
+            color: colors.onSurface,
+            fontSize: 28,
+            fontWeight: FontWeight.w700,
+          ),
         ),
-      ),
-      const SizedBox(height: 8),
-      const Text(
-        'Un registro sencillo de eventos en este teléfono.',
-        style: TextStyle(color: Colors.black54),
-      ),
-      const SizedBox(height: 24),
-      if (_lastEvent == null)
-        Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(22),
-          ),
-          child: const Column(
-            children: [
-              Icon(Icons.event_note_outlined, size: 34, color: _teal),
-              SizedBox(height: 12),
-              Text(
-                'Aún no hay eventos',
-                style: TextStyle(fontWeight: FontWeight.w700, color: _navy),
-              ),
-              SizedBox(height: 5),
-              Text(
-                'Las confirmaciones y pruebas aparecerán aquí.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.black54),
-              ),
-            ],
-          ),
-        )
-      else
-        Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(22),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.notifications_active_outlined, color: _teal),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _statusMessage,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: _navy,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _formatTime(_lastEvent!),
-                      style: const TextStyle(
-                        color: Colors.black54,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
+        const SizedBox(height: 8),
+        Text(
+          'Un registro sencillo de eventos en este teléfono.',
+          style: TextStyle(color: colors.onSurfaceVariant),
+        ),
+        const SizedBox(height: 24),
+        if (_lastEvent == null)
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: colors.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: Column(
+              children: [
+                Icon(
+                  Icons.event_note_outlined,
+                  size: 34,
+                  color: colors.primary,
                 ),
-              ),
-            ],
+                const SizedBox(height: 12),
+                Text(
+                  'Aún no hay eventos',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: colors.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  'Las confirmaciones y pruebas aparecerán aquí.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: colors.onSurfaceVariant),
+                ),
+              ],
+            ),
+          )
+        else
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: colors.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.notifications_active_outlined,
+                  color: colors.primary,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _statusMessage,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: colors.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _formatTime(_lastEvent!),
+                        style: TextStyle(
+                          color: colors.onSurfaceVariant,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 18),
+        const _NoticeCard(
+          icon: Icons.info_outline,
+          title: 'Registro local',
+          body:
+              'Los eventos de esta demostración se guardan solo en la pantalla actual; aún no se sincronizan con otros dispositivos.',
+        ),
+      ],
+    );
+  }
+
+  Widget _settings() {
+    final colors = Theme.of(context).colorScheme;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(22, 28, 22, 28),
+      children: [
+        Text(
+          'Ajustes',
+          style: TextStyle(
+            color: colors.onSurface,
+            fontSize: 28,
+            fontWeight: FontWeight.w700,
           ),
         ),
-      const SizedBox(height: 18),
-      const _NoticeCard(
-        icon: Icons.info_outline,
-        title: 'Registro local',
-        body:
-            'Los eventos de esta demostración se guardan solo en la pantalla actual; aún no se sincronizan con otros dispositivos.',
-      ),
-    ],
-  );
-
-  Widget _settings() => ListView(
-    padding: const EdgeInsets.fromLTRB(22, 28, 22, 28),
-    children: [
-      const Text(
-        'Ajustes',
-        style: TextStyle(
-          color: _navy,
-          fontSize: 28,
-          fontWeight: FontWeight.w700,
+        const SizedBox(height: 8),
+        Text(
+          'Agrega hasta cinco números. Si Android bloquea el SMS, TzindaApp intentará llamar al primer contacto.',
+          style: TextStyle(color: colors.onSurfaceVariant),
         ),
-      ),
-      const SizedBox(height: 8),
-      const Text(
-        'Agrega hasta cinco números. El SMS se enviará a todos; Guardian IoT intentará llamar a los dos primeros.',
-        style: TextStyle(color: Colors.black54),
-      ),
-      const SizedBox(height: 24),
-      _ContactsForm(contacts: _contacts, onSave: _saveContacts),
-      const SizedBox(height: 18),
-      SwitchListTile(
-        value: _automaticActions,
-        onChanged: _saveAutomaticActions,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-        title: const Text(
-          'SMS y llamada automáticos',
-          style: TextStyle(color: _navy, fontWeight: FontWeight.w700),
+        const SizedBox(height: 18),
+        SwitchListTile(
+          value: widget.darkMode,
+          onChanged: widget.onDarkModeChanged,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+          secondary: Icon(
+            widget.darkMode ? Icons.dark_mode : Icons.light_mode,
+            color: colors.primary,
+          ),
+          title: Text(
+            widget.darkMode ? 'Modo oscuro' : 'Modo claro',
+            style: TextStyle(
+              color: colors.onSurface,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          subtitle: Text(
+            'Cambiar entre fondo claro y oscuro',
+            style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
+          ),
         ),
-        subtitle: const Text(
-          'Tras una posible caída y 20 s sin cancelar, enviará SMS a los 5 números guardados e intentará llamar a los dos primeros.',
-          style: TextStyle(color: Colors.black54, fontSize: 12, height: 1.4),
+        const SizedBox(height: 10),
+        _ContactsForm(contacts: _contacts, onSave: _saveContacts),
+        const SizedBox(height: 18),
+        SwitchListTile(
+          value: _automaticActions,
+          onChanged: _saveAutomaticActions,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+          title: Text(
+            'SMS y llamada automáticos',
+            style: TextStyle(
+              color: colors.onSurface,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          subtitle: Text(
+            'Tras una posible caída y 20 s sin cancelar, enviará SMS a los contactos. Si Android no permite enviarlos, llamará al primero; si los acepta, intentará llamar a los dos primeros.',
+            style: TextStyle(
+              color: colors.onSurfaceVariant,
+              fontSize: 12,
+              height: 1.4,
+            ),
+          ),
+          secondary: Icon(Icons.sos_outlined, color: colors.primary),
         ),
-        secondary: const Icon(Icons.sos_outlined, color: _teal),
-      ),
-      const SizedBox(height: 10),
-      _ServerCard(channel: _monitorChannel, contacts: _contacts),
-      const SizedBox(height: 12),
-      const _NoticeCard(
-        icon: Icons.privacy_tip_outlined,
-        title: 'Tu privacidad',
-        body:
-            'Sin servidor, la ubicación solo sale por SMS durante una alerta. Si conectas el servidor Guardian, también se envía en el latido (cada 15 min) y durante una alerta, solo a los familiares vinculados.',
-      ),
-      const SizedBox(height: 12),
-      const _NoticeCard(
-        icon: Icons.battery_saver_outlined,
-        title: 'Uso responsable',
-        body:
-            'El monitoreo usa un servicio en primer plano con notificación persistente y se reactiva al reiniciar el teléfono. Mantén la app configurada y los permisos concedidos; el modo ahorro puede afectar el funcionamiento.',
-      ),
-      const SizedBox(height: 12),
-      const _NoticeCard(
-        icon: Icons.notifications_active_outlined,
-        title: 'Pregunta al detectar una posible caída',
-        body:
-            'Guardian IoT intentará mostrar “¿Estás bien?” sobre otras apps. En Android 14 o posterior, concede “Alertas a pantalla completa” cuando se abra Ajustes; si el sistema no lo permite, recibirás la alarma sonora/vibratoria y podrás responder desde la notificación.',
-      ),
-      const SizedBox(height: 12),
-      const _NoticeCard(
-        icon: Icons.sensors_outlined,
-        title: 'Detección experimental',
-        body:
-            'Combinamos un impacto fuerte con un periodo corto de baja actividad. Movimientos cotidianos pueden parecerse; la persona siempre puede cancelar.',
-      ),
-    ],
-  );
+        const SizedBox(height: 10),
+        _ServerCard(channel: _monitorChannel, contacts: _contacts),
+        const SizedBox(height: 12),
+        const _NoticeCard(
+          icon: Icons.privacy_tip_outlined,
+          title: 'Tu privacidad',
+          body:
+              'Sin servidor, la ubicación solo sale por SMS durante una alerta. Si conectas el servidor TzindaApp, también se envía en el latido (cada 15 min) y durante una alerta, solo a los familiares vinculados.',
+        ),
+        const SizedBox(height: 12),
+        const _NoticeCard(
+          icon: Icons.battery_saver_outlined,
+          title: 'Uso responsable',
+          body:
+              'El monitoreo usa un servicio en primer plano con notificación persistente y se reactiva al reiniciar el teléfono. Mantén la app configurada y los permisos concedidos; el modo ahorro puede afectar el funcionamiento.',
+        ),
+        const SizedBox(height: 12),
+        const _NoticeCard(
+          icon: Icons.notifications_active_outlined,
+          title: 'Pregunta al detectar una posible caída',
+          body:
+              'TzindaApp intentará mostrar “¿Estás bien?” sobre otras apps. En Android 14 o posterior, concede “Alertas a pantalla completa” cuando se abra Ajustes; si el sistema no lo permite, recibirás la alarma sonora/vibratoria y podrás responder desde la notificación.',
+        ),
+        const SizedBox(height: 12),
+        const _NoticeCard(
+          icon: Icons.sensors_outlined,
+          title: 'Detección experimental',
+          body:
+              'Combinamos un impacto fuerte con un periodo corto de baja actividad. Movimientos cotidianos pueden parecerse; la persona siempre puede cancelar.',
+        ),
+      ],
+    );
+  }
 }
 
 class _ContactsForm extends StatefulWidget {
@@ -895,99 +1045,106 @@ class _ContactsFormState extends State<_ContactsForm> {
   }
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(19),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(22),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Contactos de confianza',
-          style: TextStyle(
-            fontWeight: FontWeight.w700,
-            color: _navy,
-            fontSize: 17,
-          ),
-        ),
-        const SizedBox(height: 6),
-        const Text(
-          'El orden define a quién se llama primero.',
-          style: TextStyle(color: Colors.black54, fontSize: 12),
-        ),
-        const SizedBox(height: 15),
-        for (var i = 0; i < 5; i++) ...[
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(19),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           Text(
-            'Contacto ${i + 1}${i < 2 ? ' · llamada prioritaria' : ''}',
-            style: const TextStyle(
-              color: _teal,
+            'Contactos de confianza',
+            style: TextStyle(
               fontWeight: FontWeight.w700,
-              fontSize: 13,
+              color: colors.onSurface,
+              fontSize: 17,
             ),
           ),
-          const SizedBox(height: 7),
-          TextField(
-            controller: _names[i],
-            textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(
-              labelText: 'Nombre (opcional)',
-              prefixIcon: Icon(Icons.person_outline),
-            ),
+          const SizedBox(height: 6),
+          Text(
+            'El orden define a quién se llama primero.',
+            style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
           ),
-          const SizedBox(height: 9),
-          TextField(
-            controller: _phones[i],
-            keyboardType: TextInputType.phone,
-            decoration: const InputDecoration(
-              labelText: 'Teléfono con lada',
-              hintText: '+52 55 1234 5678',
-              prefixIcon: Icon(Icons.phone_outlined),
+          const SizedBox(height: 15),
+          for (var i = 0; i < 5; i++) ...[
+            Text(
+              'Contacto ${i + 1}${i < 2 ? ' · llamada prioritaria' : ''}',
+              style: TextStyle(
+                color: colors.primary,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
             ),
-          ),
-          if (i < 4) const SizedBox(height: 15),
-        ],
-        const SizedBox(height: 17),
-        SizedBox(
-          width: double.infinity,
-          child: FilledButton.icon(
-            onPressed: () async {
-              final contacts = List.generate(
-                5,
-                (i) => {
-                  'name': _names[i].text.trim(),
-                  'phone': _phones[i].text.trim(),
-                },
-              );
-              if (contacts.every((c) => c['phone']!.isEmpty)) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Agrega al menos un número.')),
+            const SizedBox(height: 7),
+            TextField(
+              controller: _names[i],
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(
+                labelText: 'Nombre (opcional)',
+                prefixIcon: Icon(Icons.person_outline),
+              ),
+            ),
+            const SizedBox(height: 9),
+            TextField(
+              controller: _phones[i],
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                labelText: 'Teléfono con lada',
+                hintText: '+52 55 1234 5678',
+                prefixIcon: Icon(Icons.phone_outlined),
+              ),
+            ),
+            if (i < 4) const SizedBox(height: 15),
+          ],
+          const SizedBox(height: 17),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: () async {
+                final contacts = List.generate(
+                  5,
+                  (i) => {
+                    'name': _names[i].text.trim(),
+                    'phone': _phones[i].text.trim(),
+                  },
                 );
-                return;
-              }
-              await widget.onSave(contacts);
-              if (context.mounted)
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: const Text(
-                      'Contactos guardados. Verifica que los permisos estén concedidos y que el monitoreo aparezca activo.',
+                if (contacts.every((c) => c['phone']!.isEmpty)) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Agrega al menos un número.')),
+                  );
+                  return;
+                }
+                await widget.onSave(contacts);
+                if (context.mounted)
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: const Text(
+                        'Contactos guardados. Verifica que los permisos estén concedidos y que el monitoreo aparezca activo.',
+                      ),
                     ),
-                  ),
-                );
-            },
-            icon: const Icon(Icons.save_outlined),
-            label: const Text('Guardar contactos'),
+                  );
+              },
+              icon: const Icon(Icons.save_outlined),
+              label: const Text('Guardar contactos'),
+            ),
           ),
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'Al activar alertas automáticas, el SMS se enviará a los números configurados. Las llamadas se intentarán en orden con los dos primeros.',
-          style: TextStyle(color: Colors.black54, fontSize: 12, height: 1.45),
-        ),
-      ],
-    ),
-  );
+          const SizedBox(height: 8),
+          Text(
+            'Al activar alertas automáticas, se intentará enviar SMS a los contactos configurados. Si falla, se llamará al primero.',
+            style: TextStyle(
+              color: colors.onSurfaceVariant,
+              fontSize: 12,
+              height: 1.45,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _NoticeCard extends StatelessWidget {
@@ -1000,49 +1157,52 @@ class _NoticeCard extends StatelessWidget {
   final String title;
   final String body;
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(17),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(21),
-    ),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, color: _teal),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  color: _navy,
-                  fontWeight: FontWeight.w700,
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(17),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(21),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: colors.primary),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: colors.onSurface,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 5),
-              Text(
-                body,
-                style: const TextStyle(
-                  color: Colors.black54,
-                  fontSize: 12,
-                  height: 1.45,
+                const SizedBox(height: 5),
+                Text(
+                  body,
+                  style: TextStyle(
+                    color: colors.onSurfaceVariant,
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 }
 
 String _formatTime(DateTime date) =>
     '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')} · ${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
 
-/// Conexión opcional con el servidor Guardian (carpeta backend/).
+/// Conexión opcional con el servidor TzindaApp (carpeta backend/).
 class _ServerCard extends StatefulWidget {
   const _ServerCard({required this.channel, required this.contacts});
 
@@ -1113,7 +1273,7 @@ class _ServerCardState extends State<_ServerCard> {
       'contactsJson': jsonEncode(widget.contacts),
     });
     await _loadStatus();
-    _toast('Teléfono conectado al servidor Guardian');
+    _toast('Teléfono conectado al servidor TzindaApp');
   });
 
   Future<void> _createInvite() => _run(() async {
@@ -1137,20 +1297,21 @@ class _ServerCardState extends State<_ServerCard> {
   @override
   Widget build(BuildContext context) {
     final error = _status['lastError']?.toString();
+    final colors = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(21)),
+      decoration: BoxDecoration(color: colors.surfaceContainerLow, borderRadius: BorderRadius.circular(21)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(_configured ? Icons.cloud_done_outlined : Icons.cloud_outlined, color: _teal),
+              Icon(_configured ? Icons.cloud_done_outlined : Icons.cloud_outlined, color: colors.primary),
               const SizedBox(width: 10),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Servidor Guardian (opcional)',
-                  style: TextStyle(color: _navy, fontWeight: FontWeight.w700),
+                  'Servidor TzindaApp (opcional)',
+                  style: TextStyle(color: colors.onSurface, fontWeight: FontWeight.w700),
                 ),
               ),
             ],
@@ -1160,11 +1321,11 @@ class _ServerCardState extends State<_ServerCard> {
             _configured
                 ? 'Conectado · ${_lastSync()}'
                 : 'Agrega al SMS un link con mapa en vivo, avisa si el teléfono se apaga y deja que la familia responda "Voy en camino".',
-            style: const TextStyle(color: Colors.black54, fontSize: 12, height: 1.4),
+            style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12, height: 1.4),
           ),
           if (error != null && error.isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text('Último error: $error', style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+            Text('Último error: $error', style: TextStyle(color: colors.error, fontSize: 12)),
           ],
           const SizedBox(height: 12),
           if (!_configured) ...[
@@ -1193,16 +1354,16 @@ class _ServerCardState extends State<_ServerCard> {
                 width: double.infinity,
                 margin: const EdgeInsets.only(bottom: 10),
                 padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: _mint, borderRadius: BorderRadius.circular(16)),
+                decoration: BoxDecoration(color: colors.primaryContainer, borderRadius: BorderRadius.circular(16)),
                 child: Column(
                   children: [
-                    const Text('Código para vincular a un familiar', style: TextStyle(color: _navy)),
+                    Text('Código para vincular a un familiar', style: TextStyle(color: colors.onPrimaryContainer)),
                     const SizedBox(height: 4),
                     SelectableText(
                       _invite!,
-                      style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800, letterSpacing: 6, color: _navy),
+                      style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, letterSpacing: 6, color: colors.onPrimaryContainer),
                     ),
-                    const Text('Vence en 30 minutos', style: TextStyle(color: Colors.black54, fontSize: 12)),
+                    Text('Vence en 30 minutos', style: TextStyle(color: colors.onPrimaryContainer, fontSize: 12)),
                   ],
                 ),
               ),

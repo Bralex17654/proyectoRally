@@ -1,4 +1,4 @@
-# API de Guardian IoT
+# API de TzindaApp
 
 Servidor opcional que agrega a la app lo que un teléfono solo no puede hacer: saber si el teléfono se apagó, mandar un link con mapa en vivo, dejar que la familia responda "Voy en camino", configurar a distancia y llevar estadísticas.
 
