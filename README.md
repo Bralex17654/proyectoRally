@@ -6,8 +6,8 @@ Prototipo Flutter para reutilizar un teléfono Android como apoyo preventivo. Un
 
 - La señal del acelerómetro es una heurística experimental (impacto seguido de poca actividad), no una detección médica ni infalible.
 - La heurística escucha aceleración lineal (o aceleración corregida si el sensor lineal no está disponible), espera baja actividad y activa una alarma de 20 segundos con sonido, vibración, una pantalla “¿Estás bien?” y un botón para cancelar.
-- Ajustes admite hasta cinco contactos. Al habilitar SMS/llamada automáticos, se envía el mensaje a todos y se intenta llamar a los dos primeros de forma secuencial. Guarda contactos, concede permisos de notificaciones/SMS/teléfono/ubicación y permite el inicio del monitoreo desde la app.
-- El SMS usa la SIM del dispositivo e incluye la última ubicación conocida si está disponible. La llamada y la apertura de la pantalla de confirmación dependen de permisos y restricciones de Android; si la pantalla completa está restringida, queda una notificación de alarma visible con botón para confirmar.
+- Ajustes admite hasta cinco contactos. Al habilitar SMS/llamada automáticos, se intenta enviar un SMS a todos. Si Android informa un fallo de envío, Guardian IoT intenta llamar al primer contacto; si acepta todos los SMS, intenta llamar a los dos primeros de forma secuencial.
+- El SMS usa la SIM predeterminada para mensajes e incluye la última ubicación conocida si está disponible. Las notificaciones muestran la respuesta de envío de Android, que no confirma entrega por la operadora. La llamada y la apertura de la pantalla de confirmación dependen de permisos y restricciones de Android; si la pantalla completa está restringida, queda una notificación de alarma visible con botón para confirmar.
 - Un receptor intenta reactivar el servicio al reiniciar el teléfono o actualizar la app. Forzar detención desde Ajustes o restricciones agresivas de batería pueden detenerlo. Tras forzar detención, hay que volver a abrir Guardian IoT. No hay un servidor que supervise el dispositivo.
 - “Probar alerta manual” abre el compositor SMS para revisar y enviar una prueba; no llama automáticamente.
 

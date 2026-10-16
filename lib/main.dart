@@ -266,9 +266,9 @@ class _GuardianHomeState extends State<GuardianHome>
     await prefs.setBool('automatic_actions', enabled);
     if (mounted) setState(() => _automaticActions = enabled);
     if (enabled && !_monitorActive) {
-      await _startMonitorService();
+      await _startMonitorService(skipPermissionRequest: true);
     } else if (_monitorActive) {
-      await _startMonitorService();
+      await _startMonitorService(skipPermissionRequest: true);
     }
   }
 
@@ -280,24 +280,63 @@ class _GuardianHomeState extends State<GuardianHome>
       if (requireAutomatic) Permission.sms,
       if (requireAutomatic) Permission.phone,
     ];
-    final permissionResults = await permissions.request();
-    if (requireAutomatic &&
-        (permissionResults[Permission.sms] != PermissionStatus.granted ||
-            permissionResults[Permission.phone] != PermissionStatus.granted)) {
-      if (mounted)
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Concede los permisos de SMS y teléfono para activar las alertas automáticas.',
-            ),
-          ),
+    await permissions.request();
+    if (requireAutomatic) {
+      try {
+        final status = await _monitorChannel.invokeMapMethod<String, bool>(
+          'alertPermissionStatus',
         );
-      return false;
+        final smsGranted = status?['sms'] == true;
+        final callsGranted = status?['call'] == true;
+        if (!smsGranted && !callsGranted) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Android no autorizó SMS ni llamadas. Activa al menos uno en Ajustes > Aplicaciones > Guardian IoT > Permisos.',
+                ),
+              ),
+            );
+          }
+          return false;
+        }
+        if (!smsGranted && callsGranted && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              duration: Duration(seconds: 6),
+              content: Text(
+                'Android bloqueó SMS en esta instalación. Se activarán las llamadas al primer contacto como respaldo.',
+              ),
+            ),
+          );
+        } else if (smsGranted && !callsGranted && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'SMS activado. Android no autorizó llamadas automáticas.',
+              ),
+            ),
+          );
+        }
+      } on PlatformException catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'No se pudieron comprobar los permisos: ${error.message ?? error.code}',
+              ),
+            ),
+          );
+        }
+        return false;
+      }
     }
     return true;
   }
 
-  Future<void> _startMonitorService() async {
+  Future<void> _startMonitorService({
+    bool skipPermissionRequest = false,
+  }) async {
     if (_contacts.isEmpty) {
       if (mounted)
         ScaffoldMessenger.of(context).showSnackBar(
@@ -307,7 +346,7 @@ class _GuardianHomeState extends State<GuardianHome>
         );
       return;
     }
-    if (!await _requestAlertPermissions()) return;
+    if (!skipPermissionRequest && !await _requestAlertPermissions()) return;
     try {
       await _monitorChannel.invokeMethod('startMonitoring', {
         'contactsJson': jsonEncode(_contacts),
@@ -808,7 +847,7 @@ class _GuardianHomeState extends State<GuardianHome>
       ),
       const SizedBox(height: 8),
       const Text(
-        'Agrega hasta cinco números. El SMS se enviará a todos; Guardian IoT intentará llamar a los dos primeros.',
+        'Agrega hasta cinco números. Si Android bloquea el SMS, Guardian IoT intentará llamar al primer contacto.',
         style: TextStyle(color: Colors.black54),
       ),
       const SizedBox(height: 24),
@@ -823,7 +862,7 @@ class _GuardianHomeState extends State<GuardianHome>
           style: TextStyle(color: _navy, fontWeight: FontWeight.w700),
         ),
         subtitle: const Text(
-          'Tras una posible caída y 20 s sin cancelar, enviará SMS a los 5 números guardados e intentará llamar a los dos primeros.',
+          'Tras una posible caída y 20 s sin cancelar, enviará SMS a los contactos. Si Android no permite enviarlos, llamará al primero; si los acepta, intentará llamar a los dos primeros.',
           style: TextStyle(color: Colors.black54, fontSize: 12, height: 1.4),
         ),
         secondary: const Icon(Icons.sos_outlined, color: _teal),

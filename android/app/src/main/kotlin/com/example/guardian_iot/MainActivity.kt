@@ -1,9 +1,11 @@
 package com.example.guardian_iot
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -44,6 +46,11 @@ class MainActivity : FlutterActivity() {
                     } else result.success(true)
                 }
                 "isMonitoring" -> result.success(GuardianMonitorService.isRunning)
+                "alertPermissionStatus" -> result.success(mapOf(
+                    "sms" to (ContextCompat.checkSelfPermission(this, android.Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED),
+                    "call" to (ContextCompat.checkSelfPermission(this, android.Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED),
+                    "phoneState" to (ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED),
+                ))
                 else -> result.notImplemented()
             }
         }

@@ -53,6 +53,10 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".SmsStatusReceiver"
+            android:enabled="true"
+            android:exported="false" />
         <meta-data android:name="flutterEmbedding" android:value="2" />
     </application>
 </manifest>

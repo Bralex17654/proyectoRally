@@ -6,6 +6,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.Sensor
@@ -24,6 +26,7 @@ import android.telecom.TelecomManager
 import android.telephony.PhoneStateListener
 import android.telephony.SmsManager
 import android.telephony.TelephonyManager
+import android.telephony.PhoneNumberUtils
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import org.json.JSONArray
@@ -46,6 +49,12 @@ class GuardianMonitorService : Service(), SensorEventListener {
     private var callInProgress = false
     private var observedCallState = false
     private var phoneListener: PhoneStateListener? = null
+    private var smsCallbacksExpected = 0
+    private var smsCallbacksReceived = 0
+    private var smsDispatchFinished = false
+    private var smsAnyFailed = false
+    private var smsProtocolFinished = false
+    private var fallbackCallStarted = false
 
     override fun onCreate() {
         super.onCreate()
@@ -57,6 +66,10 @@ class GuardianMonitorService : Service(), SensorEventListener {
         when (intent?.action) {
             ACTION_STOP -> { stopMonitoring(); return START_NOT_STICKY }
             ACTION_CANCEL_ALERT -> { cancelAlert(); return START_STICKY }
+            ACTION_SMS_RESULT -> {
+                handleSmsResult(intent.getBooleanExtra(EXTRA_SMS_SUCCESS, false))
+                return START_STICKY
+            }
         }
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         if (intent?.hasExtra(EXTRA_CONTACTS) == true) {
@@ -145,24 +158,151 @@ class GuardianMonitorService : Service(), SensorEventListener {
             return
         }
         val location = getLastLocationText()
-        var sent = 0
+        smsCallbacksExpected = 0
+        smsCallbacksReceived = 0
+        smsDispatchFinished = false
+        smsAnyFailed = false
+        smsProtocolFinished = false
+        fallbackCallStarted = false
+        var requested = 0
         var failed = 0
         contacts.forEach { contact ->
+            var expectedPartsForContact = 0
             try {
                 if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
                     failed++
                 } else {
-                    @Suppress("DEPRECATION")
-                    val sms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) getSystemService(SmsManager::class.java) else SmsManager.getDefault()
+                    val sms = getSmsManager()
                     val greeting = if (contact.name.isBlank()) "Hola" else "Hola ${contact.name}"
                     val body = "$greeting, Guardian IoT detectó un patrón compatible con una posible caída. Verifica cómo estoy. $location"
-                    sms.sendMultipartTextMessage(contact.phone, null, sms.divideMessage(body), null, null)
-                    sent++
+                    val parts = sms.divideMessage(body)
+                    val callbacks = ArrayList<PendingIntent>(parts.size)
+                    expectedPartsForContact = parts.size
+                    parts.forEachIndexed { index, _ ->
+                        val callbackId = smsRequestCode.incrementAndGet()
+                        val callback = Intent(this, SmsStatusReceiver::class.java).apply {
+                            action = ACTION_SMS_SENT
+                            putExtra(EXTRA_SMS_NAME, contact.name)
+                            putExtra(EXTRA_SMS_PHONE, contact.phone)
+                            putExtra(EXTRA_SMS_PART, index + 1)
+                            putExtra(EXTRA_SMS_PARTS, parts.size)
+                            putExtra(EXTRA_SMS_NOTIFICATION_ID, SMS_STATUS_NOTIFICATION_ID + callbackId)
+                        }
+                        callbacks.add(PendingIntent.getBroadcast(
+                            this,
+                            callbackId,
+                            callback,
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                        ))
+                    }
+                    if (parts.size == 1) {
+                        sms.sendTextMessage(contact.phone, null, body, callbacks.first(), null)
+                    } else {
+                        sms.sendMultipartTextMessage(contact.phone, null, parts, callbacks, null)
+                    }
+                    smsCallbacksExpected += expectedPartsForContact
+                    requested++
                 }
-            } catch (_: Exception) { failed++ }
+            } catch (error: Exception) {
+                failed++
+                smsAnyFailed = true
+                android.util.Log.e("GuardianIoT", "No se pudo solicitar SMS a ${contact.phone}", error)
+            }
         }
-        updateMonitorNotification("SMS solicitados: $sent · errores: $failed")
-        startCallSequence()
+        smsDispatchFinished = true
+        if (requested == 0) smsAnyFailed = true
+        val smsStatus = when {
+            requested == 0 -> "SMS no solicitados · revisa permiso/SIM"
+            failed > 0 -> "SMS en proceso: $requested · errores: $failed"
+            else -> "SMS en proceso para ${contacts.size} contactos"
+        }
+        updateMonitorNotification(smsStatus)
+        postSmsStatusNotification(smsStatus, failed > 0)
+        if (smsCallbacksReceived < smsCallbacksExpected) {
+            handler.removeCallbacks(smsResultTimeout)
+            handler.postDelayed(smsResultTimeout, SMS_RESULT_TIMEOUT_MS)
+        }
+        finishSmsProtocolIfReady()
+    }
+
+    private fun handleSmsResult(success: Boolean) {
+        smsCallbacksReceived++
+        if (!success) smsAnyFailed = true
+        finishSmsProtocolIfReady()
+    }
+
+    private fun finishSmsProtocolIfReady() {
+        if (!smsDispatchFinished || smsCallbacksReceived < smsCallbacksExpected || smsProtocolFinished) return
+        smsProtocolFinished = true
+        handler.removeCallbacks(smsResultTimeout)
+        if (smsAnyFailed) {
+            startFallbackCall()
+        } else if (smsCallbacksExpected > 0) {
+            startCallSequence()
+        } else {
+            startFallbackCall()
+        }
+    }
+
+    private val smsResultTimeout = Runnable {
+        if (!smsProtocolFinished) {
+            smsAnyFailed = true
+            smsProtocolFinished = true
+            startFallbackCall()
+        }
+    }
+
+    private fun startFallbackCall() {
+        if (fallbackCallStarted) return
+        fallbackCallStarted = true
+        val firstContact = contacts.firstOrNull()
+        if (firstContact == null) {
+            updateMonitorNotification("No se pudo enviar el SMS y no hay contacto para llamar")
+            postAlertNotification("No se pudo enviar el SMS · agrega un contacto", showCancel = false)
+            return
+        }
+        callTargets = listOf(firstContact)
+        callIndex = 1
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
+            updateMonitorNotification("SMS no enviado · falta permiso para llamar")
+            postAlertNotification("SMS no enviado · toca para llamar al primer contacto", showCancel = false, offerCalls = true)
+            return
+        }
+        try {
+            val telecom = getSystemService(TELECOM_SERVICE) as TelecomManager
+            telecom.placeCall(Uri.fromParts("tel", firstContact.phone, null), null)
+            updateMonitorNotification("SMS no enviado · llamando al primer contacto")
+            postAlertNotification("No se pudo enviar el SMS · llamando a ${firstContact.name.ifBlank { firstContact.phone }}", showCancel = false)
+        } catch (error: Exception) {
+            android.util.Log.e("GuardianIoT", "No se pudo llamar al primer contacto", error)
+            updateMonitorNotification("SMS y llamada no disponibles · revisa permisos/SIM")
+            postAlertNotification("No se pudo enviar el SMS · toca para llamar al primer contacto", showCancel = false, offerCalls = true)
+        }
+    }
+
+    private fun getSmsManager(): SmsManager {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val defaultSubscriptionId = android.telephony.SubscriptionManager.getDefaultSmsSubscriptionId()
+            if (defaultSubscriptionId != android.telephony.SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                return getSystemService(SmsManager::class.java).createForSubscriptionId(defaultSubscriptionId)
+            }
+        }
+        @Suppress("DEPRECATION")
+        return SmsManager.getDefault()
+    }
+
+    private fun postSmsStatusNotification(message: String, error: Boolean) {
+        val notification = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher)
+            .setContentTitle(if (error) "Guardian IoT · revisar SMS" else "Guardian IoT · alerta enviada")
+            .setContentText(message)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .build()
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(SMS_STATUS_NOTIFICATION_ID, notification)
     }
 
     private fun startCallSequence() {
@@ -330,8 +470,11 @@ class GuardianMonitorService : Service(), SensorEventListener {
         val array = JSONArray(json)
         (0 until array.length()).mapNotNull { index ->
             val item = array.optJSONObject(index) ?: return@mapNotNull null
-            val phone = item.optString("phone").trim()
-            if (phone.isBlank()) null else Contact(item.optString("name").trim(), phone)
+            val rawPhone = item.optString("phone").trim()
+            val phone = PhoneNumberUtils.stripSeparators(rawPhone)
+            val digitCount = phone.count { it.isDigit() }
+            if (phone.isBlank() || digitCount !in 7..15 || phone.drop(1).contains('+')) null
+            else Contact(item.optString("name").trim(), phone)
         }.take(5)
     } catch (_: Exception) { emptyList() }
 
@@ -377,6 +520,62 @@ class GuardianMonitorService : Service(), SensorEventListener {
         private const val ALERT_CHANNEL_ID = "guardian_fall_alarm"
         private const val NOTIFICATION_ID = 2001
         private const val ALERT_NOTIFICATION_ID = 2002
+        const val SMS_STATUS_NOTIFICATION_ID = 2003
+        const val ACTION_SMS_SENT = "com.example.guardian_iot.SMS_SENT"
+        const val EXTRA_SMS_NAME = "sms_name"
+        const val EXTRA_SMS_PHONE = "sms_phone"
+        const val EXTRA_SMS_PART = "sms_part"
+        const val EXTRA_SMS_PARTS = "sms_parts"
+        const val EXTRA_SMS_NOTIFICATION_ID = "sms_notification_id"
+        const val ACTION_SMS_RESULT = "com.example.guardian_iot.SMS_RESULT"
+        const val EXTRA_SMS_SUCCESS = "sms_success"
         private const val COOLDOWN_MS = 45_000L
+        private const val SMS_RESULT_TIMEOUT_MS = 30_000L
+        private val smsRequestCode = java.util.concurrent.atomic.AtomicInteger(10_000)
+    }
+}
+
+class SmsStatusReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != GuardianMonitorService.ACTION_SMS_SENT) return
+        val name = intent.getStringExtra(GuardianMonitorService.EXTRA_SMS_NAME).orEmpty()
+        val phone = intent.getStringExtra(GuardianMonitorService.EXTRA_SMS_PHONE).orEmpty()
+        val part = intent.getIntExtra(GuardianMonitorService.EXTRA_SMS_PART, 1)
+        val parts = intent.getIntExtra(GuardianMonitorService.EXTRA_SMS_PARTS, 1)
+        val destination = name.ifBlank { phone }
+        val (message, failed) = when (resultCode) {
+            android.app.Activity.RESULT_OK -> "SMS aceptado por Android para $destination" to false
+            SmsManager.RESULT_ERROR_NO_SERVICE -> "Sin servicio móvil: no se envió a $destination" to true
+            SmsManager.RESULT_ERROR_RADIO_OFF -> "Radio/SIM apagada: no se envió a $destination" to true
+            SmsManager.RESULT_ERROR_LIMIT_EXCEEDED -> "Límite de SMS excedido para $destination" to true
+            SmsManager.RESULT_ERROR_FDN_CHECK_FAILURE -> "La SIM bloqueó el número de $destination" to true
+            SmsManager.RESULT_ERROR_NULL_PDU -> "Error al preparar SMS para $destination" to true
+            else -> "Android rechazó el SMS para $destination (código $resultCode)" to true
+        }
+        android.util.Log.i("GuardianIoT", "$message · parte $part/$parts")
+        val notification = NotificationCompat.Builder(context, "guardian_fall_alarm")
+            .setSmallIcon(R.drawable.ic_launcher)
+            .setContentTitle(if (failed) "Guardian IoT · SMS no enviado" else "Guardian IoT · SMS procesado")
+            .setContentText(if (parts > 1) "$message · parte $part/$parts" else message)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .build()
+        val notificationId = intent.getIntExtra(
+            GuardianMonitorService.EXTRA_SMS_NOTIFICATION_ID,
+            GuardianMonitorService.SMS_STATUS_NOTIFICATION_ID,
+        )
+        (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(notificationId, notification)
+        val resultIntent = Intent(context, GuardianMonitorService::class.java).apply {
+            action = GuardianMonitorService.ACTION_SMS_RESULT
+            putExtra(GuardianMonitorService.EXTRA_SMS_SUCCESS, !failed)
+        }
+        try {
+            context.startService(resultIntent)
+        } catch (error: Exception) {
+            android.util.Log.e("GuardianIoT", "No se pudo actualizar el resultado de SMS", error)
+        }
     }
 }
