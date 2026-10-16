@@ -8,8 +8,20 @@ Prototipo Flutter para reutilizar un teléfono Android como apoyo preventivo. Un
 - La heurística escucha aceleración lineal (o aceleración corregida si el sensor lineal no está disponible), espera baja actividad y activa una alarma de 20 segundos con sonido, vibración, una pantalla “¿Estás bien?” y un botón para cancelar.
 - Ajustes admite hasta cinco contactos. Al habilitar SMS/llamada automáticos, se envía el mensaje a todos y se intenta llamar a los dos primeros de forma secuencial. Guarda contactos, concede permisos de notificaciones/SMS/teléfono/ubicación y permite el inicio del monitoreo desde la app.
 - El SMS usa la SIM del dispositivo e incluye la última ubicación conocida si está disponible. La llamada y la apertura de la pantalla de confirmación dependen de permisos y restricciones de Android; si la pantalla completa está restringida, queda una notificación de alarma visible con botón para confirmar.
-- Un receptor intenta reactivar el servicio al reiniciar el teléfono o actualizar la app. Forzar detención desde Ajustes o restricciones agresivas de batería pueden detenerlo. Tras forzar detención, hay que volver a abrir Guardian IoT. No hay un servidor que supervise el dispositivo.
+- Un receptor intenta reactivar el servicio al reiniciar el teléfono o actualizar la app. Forzar detención desde Ajustes o restricciones agresivas de batería pueden detenerlo. Tras forzar detención, hay que volver a abrir Guardian IoT. Opcionalmente, el servidor Guardian (`backend/`) supervisa el dispositivo y avisa a la familia si deja de reportarse.
 - “Probar alerta manual” abre el compositor SMS para revisar y enviar una prueba; no llama automáticamente.
+
+## Servidor Guardian (opcional)
+
+La carpeta [`backend/`](backend) tiene una API en Node.js que se conecta desde **Ajustes → Servidor Guardian**. La app sigue funcionando igual sin ella; con ella agrega:
+
+1. **Latido del dispositivo**: cada 15 min reporta batería, estado y ubicación; si deja de reportarse 45 min o la batería baja de 15 %, se avisa a la familia.
+2. **Alertas con link**: el SMS incluye un link con mapa en vivo donde el familiar toca **"Voy en camino"**. El teléfono muestra quién va y deja de llamar. Si nadie responde en 3 min, se vuelve a avisar.
+3. **Cuidadores y configuración remota**: un familiar se vincula con un código de 6 dígitos y puede cambiar contactos y la cuenta regresiva a distancia.
+4. **Eventos y estadísticas**: falsas alarmas, cancelaciones, tiempo de respuesta y lecturas para calibrar el algoritmo.
+5. **Panel comunitario**: un centro de día ve el estado de varios teléfonos.
+
+Detalles y ejemplos: [`docs/API.md`](docs/API.md). Para arrancarlo: `cd backend && npm install && npm start`.
 
 ## Ejecutar
 

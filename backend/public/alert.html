@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alerta Guardian IoT</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="top">
+      <span class="brand">🛡️ Guardian IoT</span>
+      <span id="status" class="pill">Cargando…</span>
+    </header>
+
+    <section class="card hero">
+      <h1 id="title">Alerta</h1>
+      <p id="subtitle" class="muted"></p>
+    </section>
+
+    <div id="map" class="map" role="img" aria-label="Mapa con la ubicación de la persona"></div>
+    <p id="location" class="muted small"></p>
+
+    <section class="card">
+      <h2>¿Vas a ayudar?</h2>
+      <div id="ack-form">
+        <label for="name">Tu nombre</label>
+        <input id="name" autocomplete="name" placeholder="Ej. Ana (hija)">
+        <label for="eta">¿Cuánto tardas en llegar?</label>
+        <select id="eta">
+          <option value="">No sé</option>
+          <option value="5">5 min</option>
+          <option value="15">15 min</option>
+          <option value="30">30 min</option>
+          <option value="60">1 hora o más</option>
+        </select>
+        <button id="ack" class="btn primary">Voy en camino</button>
+      </div>
+      <ul id="acks" class="list"></ul>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <a id="maps" class="btn" target="_blank" rel="noopener">Abrir en Google Maps</a>
+      </div>
+      <details>
+        <summary>Cerrar la alerta</summary>
+        <label for="reason">¿Qué pasó?</label>
+        <select id="reason">
+          <option value="attended">Ya fue atendida</option>
+          <option value="real_fall">Fue una caída real</option>
+          <option value="false_alarm">Fue una falsa alarma</option>
+          <option value="other">Otro</option>
+        </select>
+        <button id="resolve" class="btn">Cerrar alerta</button>
+      </details>
+    </section>
+
+    <p class="muted small">Guardian IoT es una herramienta de apoyo, no un servicio de emergencias. Si hay riesgo, llama al 911.</p>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script>
+    const id = location.pathname.split('/').filter(Boolean).pop();
+    const api = (p, opts) => fetch(`/api/v1/alerts/${id}${p}`, {
+      headers: { 'content-type': 'application/json' },
+      ...opts,
+    }).then(async (r) => {
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.message || `Error ${r.status}`);
+      return body;
+    });
+    const $ = (s) => document.querySelector(s);
+    const ago = (iso) => {
+      const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+      if (s < 60) return `hace ${s} s`;
+      if (s < 3600) return `hace ${Math.round(s / 60)} min`;
+      return `hace ${Math.round(s / 3600)} h`;
+    };
+    const statusText = { active: 'SIN RESPUESTA', acknowledged: 'Alguien va en camino', resolved: 'Cerrada' };
+
+    try { $('#name').value = localStorage.getItem('guardian.name') || ''; } catch {}
+
+    let map, marker, circle;
+    function render(a) {
+      document.body.dataset.status = a.status;
+      $('#status').textContent = statusText[a.status] || a.status;
+      $('#status').className = `pill ${a.status}`;
+      const who = a.personName || 'La persona protegida';
+      $('#title').textContent = a.type === 'sos' ? `${who} pidió ayuda` : `Posible caída de ${who}`;
+      const parts = [`Detectada ${ago(a.createdAt)}`];
+      if (a.battery != null) parts.push(`batería ${a.battery}%`);
+      if (a.device?.status === 'offline') parts.push('⚠️ el teléfono dejó de reportarse');
+      $('#subtitle').textContent = parts.join(' · ');
+
+      const loc = a.latestLocation;
+      if (loc) {
+        const ll = [loc.lat, loc.lng];
+        if (!map) {
+          map = L.map('map').setView(ll, 17);
+          L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap',
+          }).addTo(map);
+          marker = L.marker(ll).addTo(map);
+          circle = L.circle(ll, { radius: loc.accuracy || 20 }).addTo(map);
+        } else {
+          marker.setLatLng(ll);
+          circle.setLatLng(ll).setRadius(loc.accuracy || 20);
+        }
+        $('#location').textContent = `Ubicación actualizada ${ago(loc.at)}${loc.accuracy ? ` · ±${Math.round(loc.accuracy)} m` : ''}`;
+        $('#maps').href = `https://maps.google.com/?q=${loc.lat},${loc.lng}`;
+        $('#maps').hidden = false;
+      } else {
+        $('#map').classList.add('empty');
+        $('#map').textContent = 'Ubicación no disponible todavía';
+        $('#maps').hidden = true;
+      }
+
+      const list = $('#acks');
+      list.replaceChildren();
+      for (const ack of a.acks) {
+        const li = document.createElement('li');
+        li.textContent = `✅ ${ack.name} va en camino${ack.etaMinutes ? ` (llega en ~${ack.etaMinutes} min)` : ''} · ${ago(ack.at)}`;
+        list.append(li);
+      }
+      if (a.resolution) {
+        const li = document.createElement('li');
+        li.textContent = `💚 Cerrada ${ago(a.resolution.at)}${a.resolution.by ? ` por ${a.resolution.by}` : ''}`;
+        list.append(li);
+      }
+      const closed = a.status === 'resolved';
+      $('#ack-form').hidden = closed;
+      $('#resolve').disabled = closed;
+    }
+
+    async function refresh() {
+      try { render(await api('')); } catch (e) { $('#status').textContent = e.message; }
+    }
+
+    $('#ack').addEventListener('click', async () => {
+      const name = $('#name').value.trim();
+      if (!name) { $('#name').focus(); return; }
+      try { localStorage.setItem('guardian.name', name); } catch {}
+      const etaMinutes = $('#eta').value ? Number($('#eta').value) : undefined;
+      try { render(await api('/ack', { method: 'POST', body: JSON.stringify({ name, etaMinutes }) })); }
+      catch (e) { alert(e.message); }
+    });
+
+    $('#resolve').addEventListener('click', async () => {
+      if (!confirm('¿Cerrar la alerta para todos?')) return;
+      const by = $('#name').value.trim() || undefined;
+      try { render(await api('/resolve', { method: 'POST', body: JSON.stringify({ reason: $('#reason').value, by }) })); }
+      catch (e) { alert(e.message); }
+    });
+
+    refresh();
+    setInterval(refresh, 10000);
+  </script>
+</body>
+</html>

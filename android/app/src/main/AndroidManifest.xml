@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Servidor Guardian (opcional): latido, alertas con link y ubicación en vivo. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <queries>
         <intent>
             <action android:name="android.intent.action.SENDTO" />
@@ -19,7 +22,10 @@
     <application
         android:label="Guardian IoT"
         android:name="${applicationName}"
-        android:icon="@drawable/ic_launcher">
+        android:icon="@drawable/ic_launcher"
+        android:usesCleartextTraffic="true">
+        <!-- usesCleartextTraffic: permite http:// para probar el servidor en la red local.
+             En producción usa una URL https:// y quita esta línea. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -39,7 +45,7 @@
         <service
             android:name=".GuardianMonitorService"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse|location">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Monitoreo preventivo continuo del acelerómetro y alertas de seguridad solicitadas por el usuario" />

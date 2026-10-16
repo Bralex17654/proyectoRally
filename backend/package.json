@@ -1,0 +1,19 @@
+{
+  "name": "guardian-iot-api",
+  "version": "1.0.0",
+  "description": "API de Guardian IoT: latido del dispositivo, alertas con 'Voy en camino', cuidadores, eventos y panel comunitario.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test test/"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^5.3.0"
+  }
+}

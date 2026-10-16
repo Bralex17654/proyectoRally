@@ -3,13 +3,19 @@ package com.example.guardian_iot
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import org.json.JSONArray
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     private val channelName = "guardian_iot/monitor"
+    private val io = Executors.newSingleThreadExecutor()
+    private val main = Handler(Looper.getMainLooper())
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -44,8 +50,54 @@ class MainActivity : FlutterActivity() {
                     } else result.success(true)
                 }
                 "isMonitoring" -> result.success(GuardianMonitorService.isRunning)
+
+                // ---- Servidor Guardian (backend/) ----
+                "apiStatus" -> result.success(GuardianApi(this).status())
+                "configureApi" -> {
+                    val url = call.argument<String>("baseUrl").orEmpty()
+                    val personName = call.argument<String>("personName").orEmpty()
+                    val contacts = try {
+                        JSONArray(call.argument<String>("contactsJson") ?: "[]")
+                    } catch (_: Exception) { JSONArray() }
+                    background(result) {
+                        val api = GuardianApi(this)
+                        api.register(url, personName, "${Build.MANUFACTURER} ${Build.MODEL}", Build.VERSION.RELEASE, contacts)
+                        // Si el monitoreo está activo, se reinicia para enviar el primer latido de inmediato.
+                        if (GuardianMonitorService.isRunning) {
+                            main.post {
+                                startService(Intent(this, GuardianMonitorService::class.java).setAction(GuardianMonitorService.ACTION_START))
+                            }
+                        }
+                        api.status()
+                    }
+                }
+                "createInvite" -> background(result) {
+                    val res = GuardianApi(this).createInvite() ?: error(GuardianApi(this).status()["lastError"] ?: "Sin respuesta del servidor")
+                    mapOf("code" to res.optString("code"), "expiresAt" to res.optString("expiresAt"))
+                }
+                "disconnectApi" -> {
+                    GuardianApi(this).disconnect()
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }
+    }
+
+    /** Ejecuta trabajo de red fuera del hilo principal y responde a Flutter en el principal. */
+    private fun background(result: MethodChannel.Result, work: () -> Any?) {
+        io.execute {
+            try {
+                val value = work()
+                main.post { result.success(value) }
+            } catch (e: Exception) {
+                main.post { result.error("api_error", e.message ?: e.javaClass.simpleName, null) }
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        io.shutdown()
+        super.onDestroy()
     }
 }

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Guardian IoT API</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="top"><span class="brand">🛡️ Guardian IoT API</span><span class="pill online">En línea</span></header>
+    <section class="card">
+      <h1>Servidor de Guardian IoT</h1>
+      <p>Recibe el latido de los teléfonos reutilizados, reparte las alertas a las familias y muestra el panel comunitario.</p>
+      <ul class="list">
+        <li><b>1.</b> Dispositivos y latido · <code>POST /api/v1/devices</code>, <code>POST /api/v1/devices/:id/heartbeat</code></li>
+        <li><b>2.</b> Alertas · <code>POST /api/v1/alerts</code>, <code>/ack</code>, <code>/resolve</code>, página <code>/a/:id</code></li>
+        <li><b>3.</b> Cuidadores y configuración · <code>/api/v1/caregivers</code>, <code>/api/v1/devices/:id/config</code></li>
+        <li><b>4.</b> Eventos y estadísticas · <code>/api/v1/devices/:id/events</code>, <code>/stats</code></li>
+        <li><b>5.</b> Comunidades · <code>/api/v1/communities/:id/dashboard</code>, panel <code>/c/:id</code></li>
+      </ul>
+      <p class="muted small">Documentación completa en <code>docs/API.md</code> del repositorio.</p>
+    </section>
+  </main>
+</body>
+</html>

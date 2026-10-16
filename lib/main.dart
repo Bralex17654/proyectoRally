@@ -97,6 +97,7 @@ class _GuardianHomeState extends State<GuardianHome>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _loadContact();
       _loadMonitorState();
       _presentPendingFall();
     }
@@ -104,6 +105,8 @@ class _GuardianHomeState extends State<GuardianHome>
 
   Future<void> _loadContact() async {
     final prefs = await SharedPreferences.getInstance();
+    // Un familiar puede cambiar los contactos desde el servidor Guardian.
+    await prefs.reload();
     if (!mounted) return;
     setState(() {
       _contactName = prefs.getString('contact_name') ?? '';
@@ -829,11 +832,13 @@ class _GuardianHomeState extends State<GuardianHome>
         secondary: const Icon(Icons.sos_outlined, color: _teal),
       ),
       const SizedBox(height: 10),
+      _ServerCard(channel: _monitorChannel, contacts: _contacts),
+      const SizedBox(height: 12),
       const _NoticeCard(
         icon: Icons.privacy_tip_outlined,
         title: 'Tu privacidad',
         body:
-            'La ubicación se solicita al momento de una alerta. No se transmite a un servidor en este prototipo.',
+            'Sin servidor, la ubicación solo sale por SMS durante una alerta. Si conectas el servidor Guardian, también se envía en el latido (cada 15 min) y durante una alerta, solo a los familiares vinculados.',
       ),
       const SizedBox(height: 12),
       const _NoticeCard(
@@ -1036,3 +1041,186 @@ class _NoticeCard extends StatelessWidget {
 
 String _formatTime(DateTime date) =>
     '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')} · ${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+
+/// Conexión opcional con el servidor Guardian (carpeta backend/).
+class _ServerCard extends StatefulWidget {
+  const _ServerCard({required this.channel, required this.contacts});
+
+  final MethodChannel channel;
+  final List<Map<String, String>> contacts;
+
+  @override
+  State<_ServerCard> createState() => _ServerCardState();
+}
+
+class _ServerCardState extends State<_ServerCard> {
+  final _url = TextEditingController();
+  final _person = TextEditingController();
+  Map<String, dynamic> _status = const {};
+  String? _invite;
+  bool _busy = false;
+
+  bool get _configured => _status['configured'] == true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStatus();
+  }
+
+  @override
+  void dispose() {
+    _url.dispose();
+    _person.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadStatus() async {
+    try {
+      final raw = await widget.channel.invokeMapMethod<String, dynamic>('apiStatus');
+      if (!mounted || raw == null) return;
+      setState(() {
+        _status = raw;
+        if (_url.text.isEmpty) _url.text = raw['baseUrl']?.toString() ?? '';
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _run(Future<void> Function() action) async {
+    setState(() => _busy = true);
+    try {
+      await action();
+    } on PlatformException catch (error) {
+      _toast(error.message ?? error.code);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _toast(String text) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> _connect() => _run(() async {
+    final url = _url.text.trim();
+    if (!url.startsWith('http')) {
+      _toast('Escribe la URL completa, por ejemplo http://192.168.1.50:8080');
+      return;
+    }
+    await widget.channel.invokeMethod('configureApi', {
+      'baseUrl': url,
+      'personName': _person.text.trim(),
+      'contactsJson': jsonEncode(widget.contacts),
+    });
+    await _loadStatus();
+    _toast('Teléfono conectado al servidor Guardian');
+  });
+
+  Future<void> _createInvite() => _run(() async {
+    final res = await widget.channel.invokeMapMethod<String, dynamic>('createInvite');
+    if (mounted) setState(() => _invite = res?['code']?.toString());
+  });
+
+  Future<void> _disconnect() => _run(() async {
+    await widget.channel.invokeMethod('disconnectApi');
+    if (mounted) setState(() => _invite = null);
+    await _loadStatus();
+  });
+
+  String _lastSync() {
+    final ms = _status['lastOkAt'];
+    if (ms is! int) return 'aún sin latido';
+    final minutes = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ms)).inMinutes;
+    return minutes < 1 ? 'último contacto hace un momento' : 'último contacto hace $minutes min';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final error = _status['lastError']?.toString();
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(21)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(_configured ? Icons.cloud_done_outlined : Icons.cloud_outlined, color: _teal),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Servidor Guardian (opcional)',
+                  style: TextStyle(color: _navy, fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _configured
+                ? 'Conectado · ${_lastSync()}'
+                : 'Agrega al SMS un link con mapa en vivo, avisa si el teléfono se apaga y deja que la familia responda "Voy en camino".',
+            style: const TextStyle(color: Colors.black54, fontSize: 12, height: 1.4),
+          ),
+          if (error != null && error.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text('Último error: $error', style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+          ],
+          const SizedBox(height: 12),
+          if (!_configured) ...[
+            TextField(
+              controller: _url,
+              keyboardType: TextInputType.url,
+              decoration: const InputDecoration(labelText: 'URL del servidor', hintText: 'http://192.168.1.50:8080'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _person,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'Nombre de la persona protegida'),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: _busy ? null : _connect,
+                child: Text(_busy ? 'Conectando…' : 'Conectar'),
+              ),
+            ),
+          ] else ...[
+            if (_invite != null)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(color: _mint, borderRadius: BorderRadius.circular(16)),
+                child: Column(
+                  children: [
+                    const Text('Código para vincular a un familiar', style: TextStyle(color: _navy)),
+                    const SizedBox(height: 4),
+                    SelectableText(
+                      _invite!,
+                      style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800, letterSpacing: 6, color: _navy),
+                    ),
+                    const Text('Vence en 30 minutos', style: TextStyle(color: Colors.black54, fontSize: 12)),
+                  ],
+                ),
+              ),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.tonal(
+                    onPressed: _busy ? null : _createInvite,
+                    child: const Text('Código para familiar'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                TextButton(onPressed: _busy ? null : _disconnect, child: const Text('Desconectar')),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}

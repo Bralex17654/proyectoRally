@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Panel Guardian IoT</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="top">
+      <span class="brand">🛡️ Guardian IoT · Panel comunitario</span>
+      <span id="updated" class="muted small"></span>
+    </header>
+
+    <section id="login" class="card" hidden>
+      <h2>Entrar al panel</h2>
+      <label for="token">Token de la comunidad</label>
+      <input id="token" type="password" autocomplete="off">
+      <button id="enter" class="btn primary">Entrar</button>
+    </section>
+
+    <section id="panel" hidden>
+      <h1 id="name"></h1>
+      <div class="grid" id="summary"></div>
+      <div id="devices"></div>
+      <button id="logout" class="btn">Salir</button>
+    </section>
+  </main>
+
+  <script>
+    const id = location.pathname.split('/').filter(Boolean).pop();
+    const $ = (s) => document.querySelector(s);
+    const key = `guardian.community.${id}`;
+    let token = '';
+    try { token = sessionStorage.getItem(key) || ''; } catch {}
+
+    const ago = (iso) => {
+      if (!iso) return 'nunca';
+      const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+      return m < 1 ? 'hace un momento' : m < 60 ? `hace ${m} min` : `hace ${Math.round(m / 60)} h`;
+    };
+    const statusText = { online: 'En línea', offline: 'Sin reportarse', never: 'Sin datos' };
+
+    function el(tag, text, cls) {
+      const node = document.createElement(tag);
+      if (text != null) node.textContent = text;
+      if (cls) node.className = cls;
+      return node;
+    }
+
+    function render(data) {
+      $('#name').textContent = data.community.name;
+      $('#updated').textContent = `Actualizado ${new Date(data.generatedAt).toLocaleTimeString()}`;
+      const s = data.summary;
+      $('#summary').replaceChildren(
+        ...[['Teléfonos', s.devices], ['En línea', s.online], ['Sin reportarse', s.offline],
+            ['Batería baja', s.lowBattery], ['Alertas abiertas', s.openAlerts]].map(([label, value]) => {
+          const card = el('div', null, 'card stat');
+          card.append(el('b', String(value)), el('span', label, 'muted small'));
+          return card;
+        }),
+      );
+      $('#devices').replaceChildren(...data.devices.map((d) => {
+        const card = el('article', null, 'card device');
+        card.append(el('h3', d.personName || d.model || d.id));
+        card.append(el('span', statusText[d.status] || d.status, `pill ${d.status}`));
+        card.append(el('span', `Batería ${d.battery ?? '—'}%${d.charging ? ' ⚡' : ''}`, 'muted'));
+        card.append(el('span', `Último reporte ${ago(d.lastSeen)}`, 'muted'));
+        card.append(el('span', `Semana: ${d.week.alerts} alertas`, 'muted'));
+        for (const a of d.openAlerts) {
+          const link = el('a', `${a.type === 'sos' ? '🆘 SOS' : '🚨 Posible caída'} · ${a.status === 'acknowledged' ? 'atendiéndose' : 'SIN RESPUESTA'}`);
+          link.href = a.url;
+          card.append(link);
+        }
+        return card;
+      }));
+      if (!data.devices.length) $('#devices').append(el('p', 'Aún no hay teléfonos. Agrega uno con su código de vinculación.', 'card muted'));
+    }
+
+    async function load() {
+      if (!token) { $('#login').hidden = false; $('#panel').hidden = true; return; }
+      const r = await fetch(`/api/v1/communities/${id}/dashboard`, { headers: { authorization: `Bearer ${token}` } });
+      if (r.status === 401 || r.status === 403) { token = ''; return load(); }
+      const data = await r.json();
+      $('#login').hidden = true;
+      $('#panel').hidden = false;
+      render(data);
+    }
+
+    $('#enter').addEventListener('click', () => {
+      token = $('#token').value.trim();
+      try { sessionStorage.setItem(key, token); } catch {}
+      load();
+    });
+    $('#logout').addEventListener('click', () => {
+      token = '';
+      try { sessionStorage.removeItem(key); } catch {}
+      load();
+    });
+
+    load();
+    setInterval(() => token && load(), 15000);
+  </script>
+</body>
+</html>
