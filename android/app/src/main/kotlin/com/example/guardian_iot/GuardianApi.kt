@@ -114,6 +114,19 @@ class GuardianApi(context: Context) {
         request("GET", "/api/v1/devices/$deviceId/commands", null, connectTimeoutMs = 3000, readTimeoutMs = 4000)
             ?.optJSONArray("commands")
 
+    /**
+     * Estado en vivo de la pulsera física (API 6): última lectura con pulso,
+     * oxigenación, pico del golpe (v7) y qué teléfonos suenan con ella. Sus
+     * errores no se guardan como "último error" del servidor.
+     */
+    fun sensorStatus(): JSONObject {
+        var error: String? = null
+        return request(
+            "GET", "/api/v1/sensor", null, connectTimeoutMs = 3000, readTimeoutMs = 5000,
+            onError = { error = it },
+        ) ?: throw IllegalStateException(error ?: "Sin respuesta del servidor")
+    }
+
     private fun request(
         method: String,
         pathOrUrl: String,
@@ -121,6 +134,7 @@ class GuardianApi(context: Context) {
         auth: Boolean = true,
         connectTimeoutMs: Int = 6000,
         readTimeoutMs: Int = 10000,
+        onError: ((String) -> Unit)? = null,
     ): JSONObject? {
         val url = if (pathOrUrl.startsWith("http")) pathOrUrl else "$baseUrl$pathOrUrl"
         var connection: HttpURLConnection? = null
@@ -145,15 +159,19 @@ class GuardianApi(context: Context) {
                 prefs.edit().putLong(KEY_LAST_OK, System.currentTimeMillis()).remove(KEY_LAST_ERROR).apply()
                 json
             } else {
-                prefs.edit().putString(KEY_LAST_ERROR, json.optString("message", "Error $code")).apply()
+                fail(json.optString("message", "Error $code"), onError)
                 null
             }
         } catch (e: Exception) {
-            prefs.edit().putString(KEY_LAST_ERROR, e.message ?: e.javaClass.simpleName).apply()
+            fail(e.message ?: e.javaClass.simpleName, onError)
             null
         } finally {
             connection?.disconnect()
         }
+    }
+
+    private fun fail(message: String, onError: ((String) -> Unit)?) {
+        if (onError != null) onError(message) else prefs.edit().putString(KEY_LAST_ERROR, message).apply()
     }
 
     companion object {

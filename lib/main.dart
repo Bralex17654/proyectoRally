@@ -205,6 +205,8 @@ class _GuardianHomeState extends State<GuardianHome>
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
     if (prefs.getBool('fall_pending') != true || !mounted) return;
+    // Lo escribe el servicio cuando la alarma viene de la pulsera (con el golpe en g).
+    final detail = prefs.getString('fall_detail');
     var seconds = 20;
     _fallDialogTimer?.cancel();
     _fallDialogOpen = true;
@@ -237,10 +239,14 @@ class _GuardianHomeState extends State<GuardianHome>
             }
           });
           return AlertDialog(
-            icon: const Icon(Icons.health_and_safety, color: _teal, size: 38),
+            icon: Icon(
+              detail != null ? Icons.watch_outlined : Icons.health_and_safety,
+              color: _teal,
+              size: 38,
+            ),
             title: const Text('¿Estás bien?'),
             content: Text(
-              'Detectamos un movimiento que podría ser una caída. Si no confirmas en $seconds segundos, se activará el protocolo de avisos configurado.',
+              '${detail ?? 'Detectamos un movimiento que podría ser una caída.'} Si no confirmas en $seconds segundos, se activará el protocolo de avisos configurado.',
             ),
             actions: [
               FilledButton.icon(
@@ -766,6 +772,7 @@ class _GuardianHomeState extends State<GuardianHome>
             ],
           ),
         ),
+        _BraceletCard(channel: _monitorChannel, monitorActive: _monitorActive),
         const SizedBox(height: 17),
         Text(
           'TzindaApp es un apoyo preventivo experimental. No sustituye atención médica ni servicios de emergencia.',
@@ -1384,4 +1391,356 @@ class _ServerCardState extends State<_ServerCard> {
       ),
     );
   }
+}
+
+/// Pulsera física (MAX30102 + MPU6050) leída del servidor TzindaApp cada 3 s.
+/// Solo aparece cuando el teléfono está conectado a un servidor con pulsera.
+class _BraceletCard extends StatefulWidget {
+  const _BraceletCard({required this.channel, required this.monitorActive});
+
+  final MethodChannel channel;
+  final bool monitorActive;
+
+  @override
+  State<_BraceletCard> createState() => _BraceletCardState();
+}
+
+class _BraceletCardState extends State<_BraceletCard> {
+  /// Umbral de golpe de la pulsera v7 (CAIDA_IMPACTO_MG = 2500).
+  static const _impactG = 2.5;
+
+  Timer? _timer;
+  bool _loading = false;
+  bool _configured = false;
+  String? _error;
+  Map<String, dynamic>? _status;
+  String _deviceId = '';
+  final List<double> _peaks = [];
+  int _lastReadingId = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+    _timer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        _refresh();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    if (_loading) return;
+    _loading = true;
+    try {
+      final api = await widget.channel.invokeMapMethod<String, dynamic>(
+        'apiStatus',
+      );
+      _deviceId = api?['deviceId']?.toString() ?? '';
+      final raw = await widget.channel.invokeMethod<String>('sensorStatus');
+      if (!mounted) return;
+      setState(() {
+        _configured = raw != null;
+        _error = null;
+        _status = raw == null ? null : jsonDecode(raw) as Map<String, dynamic>;
+        _remember(_status?['ultimaLectura']);
+      });
+    } on PlatformException catch (error) {
+      if (mounted) setState(() => _error = error.message ?? error.code);
+    } finally {
+      _loading = false;
+    }
+  }
+
+  /// Guarda el pico de cada lectura nueva para la gráfica (últimos ~90 s).
+  void _remember(Object? reading) {
+    if (reading is! Map) return;
+    final id = (reading['id'] as num?)?.toInt() ?? -1;
+    if (id == _lastReadingId) return;
+    _lastReadingId = id;
+    final peak = _peakOf(reading);
+    if (peak == null) return;
+    _peaks.add(peak);
+    if (_peaks.length > 30) _peaks.removeAt(0);
+  }
+
+  /// Pulsera v7: pico de |a| en el último segundo; las lecturas viejas solo traen la magnitud.
+  static double? _peakOf(Map reading) {
+    final accel = reading['acelerometro'];
+    if (accel is! Map) return null;
+    return ((accel['pico'] ?? accel['magnitud']) as num?)?.toDouble();
+  }
+
+  static String _g(double value) =>
+      '${value.toStringAsFixed(2).replaceAll('.', ',')} g';
+
+  static String _ago(int seconds) {
+    if (seconds < 60) return '$seconds s';
+    if (seconds < 3600) return '${seconds ~/ 60} min';
+    return '${seconds ~/ 3600} h';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_configured && _error == null) return const SizedBox.shrink();
+    final colors = Theme.of(context).colorScheme;
+    final status = _status;
+    final reading = status?['ultimaLectura'] as Map<String, dynamic>?;
+    final online = _error == null && status?['enLinea'] == true;
+    final seconds = (status?['segundosDesdeUltima'] as num?)?.toInt();
+    final name = status?['personName']?.toString() ?? '';
+    final sensors = reading?['sensores'] as Map<String, dynamic>? ?? const {};
+    final finger = reading?['dedo'] == true;
+    final pulse = reading?['pulso'] as num?;
+    final spo2 = reading?['spo2'] as num?;
+    final peak = reading == null ? null : _peakOf(reading);
+    final falls = (reading?['caidas'] as num?)?.toInt() ?? 0;
+    final phones = (status?['telefonos'] as List?)?.whereType<Map>() ?? const [];
+    final listed = phones.any((p) => p['id'] == _deviceId);
+
+    final notes = <(String, bool)>[];
+    if (reading != null) {
+      if (sensors['acelerometro'] != true) {
+        notes.add((
+          'El acelerómetro no responde: la pulsera no puede detectar caídas. Revisa los cables.',
+          true,
+        ));
+      }
+      if (sensors['pulso'] != true) {
+        notes.add(('El sensor de pulso no responde.', true));
+      } else if (!finger) {
+        notes.add((
+          'Coloca el dedo en el sensor para medir pulso y oxígeno.',
+          false,
+        ));
+      }
+    }
+    if (status != null && !listed) {
+      notes.add((
+        'Este teléfono no está asignado a la pulsera: no sonará si detecta una caída.',
+        true,
+      ));
+    } else if (status != null && !widget.monitorActive) {
+      notes.add((
+        'Activa el monitoreo para que este teléfono suene cuando la pulsera detecte una caída.',
+        true,
+      ));
+    } else if (status != null) {
+      notes.add((
+        'Este teléfono sonará unos 3 s después de una caída: la pulsera confirma golpe, quietud y cambio de postura.',
+        false,
+      ));
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(top: 18),
+      padding: const EdgeInsets.all(17),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(21),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: colors.secondaryContainer,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.watch_outlined, color: colors.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name.isEmpty ? 'Pulsera' : 'Pulsera de $name',
+                      style: TextStyle(
+                        color: colors.onSurface,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      _error != null
+                          ? 'No se pudo leer: $_error'
+                          : online
+                          ? 'En línea · una lectura por segundo'
+                          : seconds == null
+                          ? 'Aún sin lecturas'
+                          : 'Sin señal desde hace ${_ago(seconds)}',
+                      style: TextStyle(
+                        color: online ? colors.onSurfaceVariant : colors.error,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: online ? Colors.green : colors.outline,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+          ),
+          if (reading != null) ...[
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                _stat(
+                  colors,
+                  Icons.favorite_border,
+                  'Pulso',
+                  finger && pulse != null ? '${pulse.round()} lpm' : '—',
+                ),
+                _stat(
+                  colors,
+                  Icons.air,
+                  'Oxígeno',
+                  finger && spo2 != null ? '${spo2.round()} %' : '—',
+                ),
+                _stat(
+                  colors,
+                  Icons.vibration,
+                  'Golpe',
+                  peak == null ? '—' : _g(peak),
+                ),
+              ],
+            ),
+            if (_peaks.length > 1) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 54,
+                width: double.infinity,
+                child: CustomPaint(
+                  painter: _PeakChartPainter(
+                    peaks: List.of(_peaks),
+                    threshold: _impactG,
+                    line: colors.primary,
+                    guide: colors.error,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Pico de movimiento por segundo · línea roja: golpe de ${_g(_impactG)}',
+                style: TextStyle(color: colors.onSurfaceVariant, fontSize: 11),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Text(
+              falls == 0
+                  ? 'Sin caídas desde que se encendió la pulsera'
+                  : 'Caídas detectadas desde que se encendió: $falls',
+              style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
+            ),
+          ],
+          for (final (text, warning) in notes) ...[
+            const SizedBox(height: 6),
+            Text(
+              text,
+              style: TextStyle(
+                color: warning ? colors.error : colors.onSurfaceVariant,
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _stat(ColorScheme colors, IconData icon, String label, String value) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 15, color: colors.primary),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12),
+              ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            value,
+            style: TextStyle(
+              color: colors.onSurface,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Picos recientes de la pulsera con la línea punteada del umbral de golpe.
+class _PeakChartPainter extends CustomPainter {
+  _PeakChartPainter({
+    required this.peaks,
+    required this.threshold,
+    required this.line,
+    required this.guide,
+  });
+
+  final List<double> peaks;
+  final double threshold;
+  final Color line;
+  final Color guide;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final top = [threshold * 1.2, ...peaks].reduce((a, b) => a > b ? a : b);
+    double y(double g) => size.height - (g / top).clamp(0.0, 1.0) * size.height;
+
+    final guideY = y(threshold);
+    final dash = Paint()
+      ..color = guide.withValues(alpha: 0.7)
+      ..strokeWidth = 1;
+    for (var x = 0.0; x < size.width; x += 8) {
+      canvas.drawLine(Offset(x, guideY), Offset(x + 4, guideY), dash);
+    }
+
+    final step = size.width / (peaks.length - 1);
+    final path = Path()..moveTo(0, y(peaks.first));
+    for (var i = 1; i < peaks.length; i++) {
+      path.lineTo(i * step, y(peaks[i]));
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = line
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..strokeJoin = StrokeJoin.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_PeakChartPainter old) =>
+      old.line != line ||
+      old.peaks.length != peaks.length ||
+      old.peaks.last != peaks.last;
 }

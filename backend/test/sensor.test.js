@@ -203,6 +203,7 @@ describe('API de la pulsera (API 6)', () => {
     const commands = await poll();
     assert.equal(commands.length, 1);
     assert.equal(commands[0].type, 'fall_alarm');
+    assert.equal(typeof commands[0].peakG, 'number', 'el teléfono muestra el golpe en g');
     const alert = ctx.store.data.alerts[commands[0].alertId];
     assert.equal(alert.source, 'sensor');
     assert.equal(commands[0].url, `https://tzinda.test/a/${alert.id}`);

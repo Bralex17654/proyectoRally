@@ -196,6 +196,8 @@ Acceso: header `X-Admin-Key` (la ADMIN_KEY del servidor) o el token de un famili
 
 **La pulsera hace sonar el teléfono.** Cuando la pulsera marca una caída, además de crear la alerta, el servidor deja una orden `fall_alarm` para los teléfonos vinculados. La app la recoge con `GET /devices/:id/commands` (cada 5 s, token del teléfono; cada orden se entrega una vez y caduca a los 2 minutos) y hace lo mismo que con su propio sensor: alarma "¿Estás bien?" con cuenta regresiva. "Estoy bien" cierra la alerta como falsa alarma; si nadie responde, el teléfono manda los SMS con el link de esa misma alerta y llama. `GET /sensor` muestra en `telefonos[].escuchando` si cada teléfono está consultando.
 
+La orden incluye `peakG`: el pico del golpe en g que midió la pulsera v7 (`null` en una caída simulada); la app lo muestra en la alarma ("La pulsera detectó un golpe de 3,4 g…"). Los teléfonos vinculados también pueden leer `GET /sensor` con su propio token para mostrar la pulsera en vivo (pulso, oxígeno y golpe por segundo); simular caídas, crear invitaciones y cambiar los teléfonos siguen pidiendo la `ADMIN_KEY`.
+
 Si el acelerómetro de la pulsera falla (`mpu_ok = 0`), el servidor avisa una vez a la familia: sin él no se detectan caídas.
 
 Una lectura:

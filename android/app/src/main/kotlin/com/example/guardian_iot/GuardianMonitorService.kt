@@ -79,6 +79,8 @@ class GuardianMonitorService : Service(), SensorEventListener {
     /** Alerta que el servidor ya creó por una caída de la pulsera: (id, link). */
     private var sensorAlert: Pair<String, String>? = null
     private var countdownLabel = "Posible caída"
+    /** Pico del golpe (en g) que mandó la pulsera v7 con la orden de alarma. */
+    private var sensorPeakG: Double? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -178,13 +180,26 @@ class GuardianMonitorService : Service(), SensorEventListener {
         if (alertPending) return
         alertPending = true
         secondsLeft = countdownTotal
-        countdownLabel = if (fromSensor) "La pulsera detectó una posible caída" else "Posible caída"
-        getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit().putBoolean(FLUTTER_PENDING_KEY, true).apply()
+        val hit = sensorPeakG?.takeIf { fromSensor && it > 0 }?.let { "golpe de ${"%.1f".format(it)} g" }
+        countdownLabel = when {
+            !fromSensor -> "Posible caída"
+            hit != null -> "La pulsera detectó una posible caída ($hit)"
+            else -> "La pulsera detectó una posible caída"
+        }
+        // La ventana "¿Estás bien?" de la app explica qué vio la pulsera.
+        val detail = when {
+            !fromSensor -> null
+            hit != null -> "La pulsera detectó un $hit, después quietud y un cambio de postura. Puede ser una caída."
+            else -> "La pulsera marcó una posible caída."
+        }
+        val editor = getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit().putBoolean(FLUTTER_PENDING_KEY, true)
+        if (detail != null) editor.putString(FLUTTER_DETAIL_KEY, detail) else editor.remove(FLUTTER_DETAIL_KEY)
+        editor.apply()
         postAlertNotification("$countdownLabel · ¿estás bien? $secondsLeft s", showCancel = true)
         updateMonitorNotification("$countdownLabel · revisión de $countdownTotal segundos")
         // Se empieza a buscar GPS desde ya para tener una ubicación fresca si hay que avisar.
         startLocationUpdates()
-        reportEvent("countdown_started", JSONObject().put("peak", peak))
+        reportEvent("countdown_started", JSONObject().put("peak", peak).put("source", if (fromSensor) "sensor" else "phone").put("sensorPeakG", sensorPeakG.takeIf { fromSensor } ?: JSONObject.NULL))
         handler.removeCallbacks(countdownTick)
         handler.post(countdownTick)
     }
@@ -559,6 +574,7 @@ class GuardianMonitorService : Service(), SensorEventListener {
             if (alertId.isBlank()) continue
             sensorAlert = alertId to command.optString("url")
             peak = 0.0
+            sensorPeakG = command.optDouble("peakG", Double.NaN).takeIf { !it.isNaN() }
             beginCountdown(fromSensor = true)
         }
     }
@@ -856,6 +872,7 @@ class GuardianMonitorService : Service(), SensorEventListener {
         private const val PREF_COUNTDOWN = "countdown_seconds"
         private const val FLUTTER_PREFS = "FlutterSharedPreferences"
         private const val FLUTTER_PENDING_KEY = "flutter.fall_pending"
+        private const val FLUTTER_DETAIL_KEY = "flutter.fall_detail"
         private const val MONITOR_CHANNEL_ID = "guardian_monitor_v2"
         private const val ALERT_CHANNEL_ID = "guardian_fall_alarm"
         private const val NOTIFICATION_ID = 2001

@@ -83,6 +83,11 @@ class MainActivity : FlutterActivity() {
                     val res = api.createInvite() ?: error(api.status()["lastError"] ?: "Sin respuesta del servidor")
                     mapOf("code" to res.optString("code"), "expiresAt" to res.optString("expiresAt"))
                 }
+                // Pulsera física: JSON de GET /api/v1/sensor, o null si el teléfono no está conectado al servidor.
+                "sensorStatus" -> background(result) {
+                    val api = GuardianApi(this)
+                    if (api.isConfigured) api.sensorStatus().toString() else null
+                }
                 "disconnectApi" -> {
                     GuardianApi(this).disconnect()
                     result.success(true)

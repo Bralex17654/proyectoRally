@@ -84,7 +84,7 @@ export async function triggerSensorFall(ctx, device, { detectedAt, peak, sensor 
   );
   const phones = sensorCompanions(ctx);
   for (const phone of phones) {
-    queueCommand(ctx, phone, { type: 'fall_alarm', alertId: alert.id, url, source: 'sensor' });
+    queueCommand(ctx, phone, { type: 'fall_alarm', alertId: alert.id, url, source: 'sensor', peakG: peak ?? null });
   }
   logEvent(ctx, device.id, 'sensor_phones_notified', { alertId: alert.id, phones: phones.map((p) => p.id) });
   ctx.store.save();
