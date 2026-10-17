@@ -132,7 +132,7 @@ export function linkSensorToAlerts(ctx, hub, device, { cooldownMs = 120_000 } = 
         continue;
       }
       lastAlertAt = now;
-      const peak = Math.max(...window.map((w) => w.acelerometro.magnitud ?? 0));
+      const peak = Math.max(...window.map((w) => w.acelerometro.pico ?? w.acelerometro.magnitud ?? 0));
       await triggerSensorFall(ctx, device, { detectedAt: r.hora, peak, sensor });
     }
 

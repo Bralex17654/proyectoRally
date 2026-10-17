@@ -30,12 +30,12 @@
       <div class="grid">
         <div class="card stat"><span class="muted small">Pulso</span><b id="bpm">—</b><span class="muted small">latidos por minuto</span></div>
         <div class="card stat"><span class="muted small">Oxigenación</span><b id="spo2">—</b><span class="muted small">SpO₂ %</span></div>
-        <div class="card stat"><span class="muted small">Movimiento</span><b id="mag">—</b><span class="muted small">g (1 g = en reposo)</span></div>
+        <div class="card stat"><span class="muted small">Movimiento</span><b id="mag">—</b><span id="magNote" class="muted small">g (1 g = en reposo)</span></div>
         <div class="card stat"><span class="muted small">Caídas marcadas</span><b id="falls">—</b><span id="fallsNote" class="muted small">desde que se encendió</span></div>
       </div>
 
       <section class="card">
-        <h2>Aceleración, últimos 60 segundos</h2>
+        <h2>Aceleración, últimos 60 segundos (pico de cada segundo)</h2>
         <svg id="chart" viewBox="0 0 700 200" role="img" aria-label="Magnitud de aceleración de la pulsera en los últimos 60 segundos" style="width:100%;height:auto"></svg>
         <p id="sensors" class="muted small"></p>
       </section>
@@ -108,11 +108,12 @@
       $('#bpm').textContent = r.dedo && r.pulso ? r.pulso : '—';
       $('#spo2').textContent = r.dedo && r.spo2 ? r.spo2 : '—';
       $('#mag').textContent = r.acelerometro.magnitud != null ? r.acelerometro.magnitud.toFixed(2) : '—';
+      $('#magNote').textContent = r.acelerometro.pico != null ? `g · pico ${r.acelerometro.pico.toFixed(2)} g en el último segundo` : 'g (1 g = en reposo)';
       $('#falls').textContent = r.caidas;
       $('#fallsNote').textContent = r.caida ? '⚠️ caída marcada ahora' : 'desde que se encendió';
       if (!r.dedo) $('#bpm').title = $('#spo2').title = 'Coloca el dedo en el sensor';
       $('#sensors').textContent = `Sensor de pulso: ${r.sensores.pulso ? 'OK' : 'con error'} · Acelerómetro: ${r.sensores.acelerometro ? 'OK' : 'con error'}${r.dedo ? '' : ' · sin dedo en el sensor de pulso'}`;
-      series.push({ g: r.acelerometro.magnitud ?? 0, caida: r.caida });
+      series.push({ g: r.acelerometro.pico ?? r.acelerometro.magnitud ?? 0, caida: r.caida });
       if (series.length > 60) series.shift();
       drawChart();
       clearTimeout(staleTimer);
@@ -165,7 +166,7 @@
         if (st.ultimaLectura) {
           const hist = await api('/lecturas?limit=60');
           series.length = 0;
-          hist.lecturas.forEach((r) => series.push({ g: r.acelerometro.magnitud ?? 0, caida: r.caida }));
+          hist.lecturas.forEach((r) => series.push({ g: r.acelerometro.pico ?? r.acelerometro.magnitud ?? 0, caida: r.caida }));
           render(st.ultimaLectura);
           setStatus(st.enLinea);
         }

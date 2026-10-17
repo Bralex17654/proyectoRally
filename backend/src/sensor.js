@@ -22,6 +22,9 @@ export function formatReading(row) {
       y: num(row.ay_g),
       z: num(row.az_g),
       magnitud: num(row.mag_g),
+      // Pulsera v7: |a| maximo y minimo entre lecturas (el golpe dura centesimas).
+      pico: num(row.mag_max_g),
+      minimo: num(row.mag_min_g),
     },
     caida: row.caida === 1,
     caidas: row.caidas ?? 0,

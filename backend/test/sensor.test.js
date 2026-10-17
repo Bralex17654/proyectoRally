@@ -44,6 +44,11 @@ describe('lecturas de la pulsera', () => {
     assert.equal(withFinger.acelerometro.magnitud, 0.954);
     assert.equal(withFinger.sensores.acelerometro, true);
 
+    assert.equal(withFinger.acelerometro.pico, null, 'la v6 no manda pico');
+    const v7 = formatReading(row(3, { mag_max_g: '3.420', mag_min_g: '0.380' }));
+    assert.equal(v7.acelerometro.pico, 3.42);
+    assert.equal(v7.acelerometro.minimo, 0.38);
+
     const noFinger = formatReading(row(2, { dedo: 0, bpm: 0, spo2: 0 }));
     assert.equal(noFinger.pulso, null);
     assert.equal(noFinger.spo2, null);

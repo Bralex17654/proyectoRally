@@ -1,0 +1,5 @@
+# ignore app cache folder
+.cache/
+python/db.conf
+python/datos*.csv
+python/__pycache__/
