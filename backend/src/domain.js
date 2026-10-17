@@ -108,6 +108,8 @@ export function alertView(ctx, alert, base) {
     url: alertUrl(base, alert.id),
     personName: alert.personName,
     type: alert.type,
+    source: alert.source ?? 'app',
+    sensor: alert.sensor ?? null,
     status: alert.status,
     createdAt: alert.createdAt,
     detectedAt: alert.detectedAt,

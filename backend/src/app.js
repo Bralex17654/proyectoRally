@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,6 +10,7 @@ import { caregiversRouter } from './routes/caregivers.js';
 import { communitiesRouter } from './routes/communities.js';
 import { devicesRouter } from './routes/devices.js';
 import { eventsRouter } from './routes/events.js';
+import { sensorRouter } from './routes/sensor.js';
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -16,8 +18,11 @@ const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 
  * Crea la app con sus dependencias inyectadas (almacenamiento, avisos y reloj)
  * para poder probarla sin red ni esperas reales.
  */
-export function createApp({ store, notifier, config, now = () => Date.now() }) {
-  const ctx = { store, notifier, config, now, lastBase: null };
+export function createApp({ store, notifier, config, now = () => Date.now(), sensor = null }) {
+  // `sensor` = { hub, deviceId } cuando hay una pulsera física conectada a la base.
+  const bus = new EventEmitter();
+  bus.setMaxListeners(100);
+  const ctx = { store, notifier, config, now, lastBase: null, sensor, bus };
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', true);
@@ -40,12 +45,14 @@ export function createApp({ store, notifier, config, now = () => Date.now() }) {
   api.use(caregiversRouter(ctx));
   api.use(eventsRouter(ctx));
   api.use(communitiesRouter(ctx));
+  api.use(sensorRouter(ctx));
   api.use((_req, res) => res.status(404).json({ error: 'not_found', message: 'Ruta no encontrada' }));
   app.use('/api/v1', api);
 
   // Páginas web: alerta para familiares (link del SMS) y panel comunitario.
   app.get('/a/:id', (_req, res) => res.sendFile(path.join(publicDir, 'alert.html')));
   app.get('/c/:id', (_req, res) => res.sendFile(path.join(publicDir, 'dashboard.html')));
+  app.get('/sensor', (_req, res) => res.sendFile(path.join(publicDir, 'sensor.html')));
   app.use(express.static(publicDir));
 
   // eslint-disable-next-line no-unused-vars

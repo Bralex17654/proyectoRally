@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
-import { assertDeviceAccess, getDevice, newId, optionalAuth, requireAuth } from '../auth.js';
+import { raiseAlert } from '../alert-service.js';
+import { assertDeviceAccess, getDevice, optionalAuth, requireAuth } from '../auth.js';
 import {
   ALERT_TYPES,
   RESOLUTION_REASONS,
@@ -40,33 +41,23 @@ export function alertsRouter(ctx) {
     const device = getDevice(store, req.who.id);
     const body = req.body ?? {};
     const now = ctx.now();
-    const loc = v.location(body.location, { now });
-    const alert = {
-      id: newId('al', 8),
-      deviceId: device.id,
-      personName: device.personName,
-      type: v.oneOf(body.type ?? 'fall', ALERT_TYPES, { name: 'type' }),
-      status: 'active',
-      createdAt: iso(now),
-      detectedAt: v.timestamp(body.detectedAt, { name: 'detectedAt', now }),
-      peak: v.num(body.peak, { name: 'peak', min: 0, max: 1000, optional: true }) ?? null,
-      battery: v.num(body.battery, { name: 'battery', min: 0, max: 100, integer: true, optional: true }) ?? null,
-      sms: {
-        sent: v.num(body.sms?.sent, { name: 'sms.sent', min: 0, max: 50, integer: true, optional: true }) ?? null,
-        failed: v.num(body.sms?.failed, { name: 'sms.failed', min: 0, max: 50, integer: true, optional: true }) ?? null,
+    const { alert, url } = await raiseAlert(
+      ctx,
+      device,
+      {
+        type: v.oneOf(body.type ?? 'fall', ALERT_TYPES, { name: 'type' }),
+        source: 'app',
+        detectedAt: v.timestamp(body.detectedAt, { name: 'detectedAt', now }),
+        peak: v.num(body.peak, { name: 'peak', min: 0, max: 1000, optional: true }) ?? null,
+        battery: v.num(body.battery, { name: 'battery', min: 0, max: 100, integer: true, optional: true }) ?? null,
+        sms: {
+          sent: v.num(body.sms?.sent, { name: 'sms.sent', min: 0, max: 50, integer: true, optional: true }) ?? null,
+          failed: v.num(body.sms?.failed, { name: 'sms.failed', min: 0, max: 50, integer: true, optional: true }) ?? null,
+        },
+        location: v.location(body.location, { now }),
       },
-      locations: loc ? [loc] : [],
-      acks: [],
-      escalations: 0,
-      lastEscalationAt: null,
-      resolution: null,
-    };
-    store.data.alerts[alert.id] = alert;
-    const base = publicBase(ctx, req);
-    const url = alertUrl(base, alert.id);
-    logEvent(ctx, device.id, 'alert_created', { alertId: alert.id, type: alert.type, peak: alert.peak });
-    store.save();
-    await ctx.notifier.toCaregivers(store, device.id, 'alert', messages.alert(alert, url));
+      publicBase(ctx, req),
+    );
     res.status(201).json({ alertId: alert.id, url, status: alert.status });
   });
 

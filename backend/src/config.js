@@ -21,5 +21,18 @@ export function loadConfig(env = process.env) {
     inviteTtlMs: minutes(env.INVITE_TTL_MIN ?? 30),
     retentionDays: Number(env.RETENTION_DAYS ?? 30),
     watchdogIntervalMs: Number(env.WATCHDOG_INTERVAL_MS ?? 60000),
+
+    // PostgreSQL (Neon). Sin DATABASE_URL se usa el archivo JSON.
+    databaseUrl: env.DATABASE_URL || null,
+    dbSchema: env.DB_SCHEMA ?? 'tzinda',
+
+    // Pulsera física: lee su tabla de lecturas en tiempo real.
+    sensorEnabled: env.SENSOR_ENABLED !== 'false',
+    sensorTable: env.SENSOR_TABLE ?? 'public.lecturas',
+    sensorPollMs: Number(env.SENSOR_POLL_MS ?? 1000),
+    sensorAlertCooldownMs: Number(env.SENSOR_ALERT_COOLDOWN_S ?? 120) * 1000,
+    sensorOnlineSeconds: Number(env.SENSOR_ONLINE_SECONDS ?? 15),
+    sensorPersonName: env.SENSOR_PERSON_NAME || 'Persona con pulsera',
+    sensorPersonNameSet: Boolean(env.SENSOR_PERSON_NAME),
   };
 }

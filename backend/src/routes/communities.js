@@ -1,18 +1,10 @@
-import crypto from 'node:crypto';
-
 import { Router } from 'express';
 
-import { issueToken, newId, requireAuth } from '../auth.js';
+import { issueToken, newId, requireAuth, sameSecret } from '../auth.js';
 import { deviceStats, deviceView, iso, logEvent, publicBase } from '../domain.js';
 import { forbidden, notFound, unauthorized } from '../errors.js';
 import * as v from '../validation.js';
 import { redeemInvite } from './caregivers.js';
-
-const sameSecret = (a, b) => {
-  const x = Buffer.from(String(a ?? ''));
-  const y = Buffer.from(String(b ?? ''));
-  return x.length === y.length && crypto.timingSafeEqual(x, y);
-};
 
 /** API 5: centros de día, comités vecinales o asilos que supervisan varios teléfonos. */
 export function communitiesRouter(ctx) {

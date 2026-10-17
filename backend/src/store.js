@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const empty = () => ({
+export const empty = () => ({
   devices: {},
   caregivers: {},
   communities: {},
@@ -10,6 +10,8 @@ const empty = () => ({
   events: [],
   /** hash del token → { kind, id } */
   tokens: {},
+  /** ajustes del servidor, p. ej. qué dispositivo representa a la pulsera física */
+  settings: {},
 });
 
 const MAX_EVENTS = 20000;

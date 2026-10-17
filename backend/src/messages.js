@@ -4,10 +4,13 @@ const who = (name) => (name?.trim() ? name.trim() : 'la persona protegida');
 
 /** Textos de los avisos a cuidadores. */
 export const messages = {
-  alert: (alert, url) =>
-    alert.type === 'sos'
-      ? `🆘 TzindaApp: ${who(alert.personName)} pidió ayuda con el botón SOS. Mapa y "Voy en camino": ${url}`
-      : `🚨 TzindaApp: posible caída de ${who(alert.personName)}. Mapa y "Voy en camino": ${url}`,
+  alert: (alert, url) => {
+    if (alert.type === 'sos') {
+      return `🆘 TzindaApp: ${who(alert.personName)} pidió ayuda con el botón SOS. Mapa y "Voy en camino": ${url}`;
+    }
+    const by = alert.source === 'sensor' ? 'la pulsera detectó una ' : '';
+    return `🚨 TzindaApp: ${by}posible caída de ${who(alert.personName)}. Detalles y "Voy en camino": ${url}`;
+  },
   ack: (alert, name, url) => `✅ ${name} va en camino con ${who(alert.personName)}. ${url}`,
   resolved: (alert, reason, by) =>
     `💚 Se cerró la alerta de ${who(alert.personName)}: ${reasonLabel[reason] ?? reason}${by ? ` (${by})` : ''}.`,

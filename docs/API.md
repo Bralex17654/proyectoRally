@@ -173,6 +173,54 @@ El panel devuelve un resumen (teléfonos, en línea, sin reportarse, batería ba
 
 ---
 
+## 6. Pulsera física (lecturas en tiempo real)
+
+La pulsera (sensor de pulso MAX30102 + acelerómetro MPU6050) escribe una fila por segundo en `public.lecturas` de la base PostgreSQL (Neon). El servidor la lee sin modificarla, cada segundo, y:
+
+- la representa como un dispositivo más (`kind: "sensor"`), así recibe familiares con código de invitación y aparece en el panel comunitario;
+- usa cada lectura como latido (si deja de escribir, el vigilante avisa que "dejó de reportarse");
+- cuando la pulsera marca una caída (`caida` pasa a 1 o el contador `caidas` sube), crea una alerta con link y avisa a la familia. Otra caída dentro de 2 minutos solo se registra como evento `sensor_fall_repeat`.
+
+Acceso: header `X-Admin-Key` (la ADMIN_KEY del servidor) o el token de un familiar o comunidad vinculados a la pulsera. Como `EventSource` no manda encabezados, también se acepta `?key=`.
+
+| Método | Ruta | Para qué |
+|---|---|---|
+| `GET` | `/sensor` | Estado: en línea, segundos desde la última lectura, última lectura, total de lecturas |
+| `GET` | `/sensor/lecturas?limit=60&desde=<id>` | Lecturas en orden cronológico: las últimas, o las posteriores a un id |
+| `GET` | `/sensor/resumen?minutos=60` | Pulso y oxigenación (solo con dedo en el sensor), movimiento máximo, caídas y salud de los sensores |
+| `GET` | `/sensor/stream` | Transmisión en vivo (Server-Sent Events): evento `lectura` por cada fila nueva y `alerta` si la pulsera marca una caída |
+| `GET` | `/sensor/alertas` | Últimas 20 alertas de la pulsera con su link |
+| `POST` | `/sensor/invite` | Solo con ADMIN_KEY: código de 6 dígitos para vincular a un familiar o comunidad |
+
+Una lectura:
+
+```json
+{ "id": 1452, "hora": "2026-10-17T01:22:40.711Z", "dedo": true, "pulso": 81, "spo2": 96,
+  "acelerometro": { "x": -0.042, "y": -0.02, "z": 0.953, "magnitud": 0.954 },
+  "caida": false, "caidas": 5, "sensores": { "pulso": true, "acelerometro": true } }
+```
+
+`pulso` y `spo2` valen `null` cuando no hay dedo en el sensor. Son valores del sensor, no un diagnóstico médico.
+
+Escuchar en vivo desde JavaScript:
+
+```js
+const live = new EventSource('/api/v1/sensor/stream?key=TU_CLAVE');
+live.addEventListener('lectura', (e) => console.log(JSON.parse(e.data)));
+live.addEventListener('alerta', (e) => console.log('caída', JSON.parse(e.data).url));
+```
+
+Página web: `GET /sensor` (monitor en vivo con pulso, oxigenación, gráfica de aceleración de 60 s, caídas y alertas).
+
+### Dónde se guardan los datos
+
+Con `DATABASE_URL`, todo lo de las APIs 1–5 vive en el esquema `tzinda` de la misma base: tabla `tzinda.registros` (colección, id, datos jsonb) y las vistas `tzinda.dispositivos` y `tzinda.alertas` para consultarlas con SQL:
+
+```sql
+select persona, ultimo_latido from tzinda.dispositivos;
+select persona, origen, estado, creada from tzinda.alertas order by creada desc;
+```
+
 ## Avisos a familiares
 
 | Evento | Texto |
@@ -181,6 +229,7 @@ El panel devuelve un resumen (teléfonos, en línea, sin reportarse, batería ba
 | SOS | 🆘 Doña María pidió ayuda con el botón SOS… |
 | Alguien responde | ✅ Ana va en camino con Doña María |
 | Nadie responde | ⚠️ SIN RESPUESTA (1): nadie ha confirmado la alerta… |
+| Caída marcada por la pulsera | 🚨 la pulsera detectó una posible caída de Doña María… |
 | Teléfono apagado | 📵 El teléfono de Doña María dejó de reportarse hace 45 min |
 | Batería baja | 🔋 El teléfono de Doña María tiene 14 % de batería |
 

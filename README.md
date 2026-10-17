@@ -20,6 +20,7 @@ La carpeta [`backend/`](backend) tiene una API en Node.js que se conecta desde *
 3. **Cuidadores y configuración remota**: un familiar se vincula con un código de 6 dígitos y puede cambiar contactos y la cuenta regresiva a distancia.
 4. **Eventos y estadísticas**: falsas alarmas, cancelaciones, tiempo de respuesta y lecturas para calibrar el algoritmo.
 5. **Panel comunitario**: un centro de día ve el estado de varios teléfonos.
+6. **Pulsera física en tiempo real**: lee de PostgreSQL (Neon) el pulso, la oxigenación y el acelerómetro de la pulsera; si marca una caída, se crea la alerta y se avisa a la familia. Monitor en vivo en `/sensor`.
 
 Detalles y ejemplos: [`docs/API.md`](docs/API.md). Para arrancarlo: `cd backend && npm install && npm start`.
 

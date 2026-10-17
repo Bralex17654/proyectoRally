@@ -6,6 +6,13 @@ export const newId = (prefix, bytes = 6) => `${prefix}_${crypto.randomBytes(byte
 export const newToken = () => crypto.randomBytes(24).toString('base64url');
 export const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
+/** Compara secretos en tiempo constante. */
+export const sameSecret = (a, b) => {
+  const x = Buffer.from(String(a ?? ''));
+  const y = Buffer.from(String(b ?? ''));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+};
+
 /** Registra un token (solo se guarda su hash) para un dispositivo, cuidador o comunidad. */
 export function issueToken(store, kind, id) {
   const token = newToken();

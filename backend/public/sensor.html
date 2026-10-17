@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pulsera en vivo · TzindaApp</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="top">
+      <span class="brand">🛡️ TzindaApp · Pulsera en vivo</span>
+      <span id="status" class="pill never">Sin conexión</span>
+    </header>
+
+    <section id="login" class="card" hidden>
+      <h2>Entrar al monitor</h2>
+      <p class="muted small">Usa la ADMIN_KEY del servidor o el token de un familiar vinculado a la pulsera.</p>
+      <label for="key">Clave</label>
+      <input id="key" type="password" autocomplete="off">
+      <button id="enter" class="btn primary">Entrar</button>
+    </section>
+
+    <section id="panel" hidden>
+      <section class="card hero">
+        <h1 id="person">Pulsera</h1>
+        <p id="subtitle" class="muted">Esperando lecturas…</p>
+      </section>
+
+      <div class="grid">
+        <div class="card stat"><span class="muted small">Pulso</span><b id="bpm">—</b><span class="muted small">latidos por minuto</span></div>
+        <div class="card stat"><span class="muted small">Oxigenación</span><b id="spo2">—</b><span class="muted small">SpO₂ %</span></div>
+        <div class="card stat"><span class="muted small">Movimiento</span><b id="mag">—</b><span class="muted small">g (1 g = en reposo)</span></div>
+        <div class="card stat"><span class="muted small">Caídas marcadas</span><b id="falls">—</b><span id="fallsNote" class="muted small">desde que se encendió</span></div>
+      </div>
+
+      <section class="card">
+        <h2>Aceleración, últimos 60 segundos</h2>
+        <svg id="chart" viewBox="0 0 700 200" role="img" aria-label="Magnitud de aceleración de la pulsera en los últimos 60 segundos" style="width:100%;height:auto"></svg>
+        <p id="sensors" class="muted small"></p>
+      </section>
+
+      <section class="card">
+        <h2>Última hora</h2>
+        <ul id="summary" class="list"></ul>
+      </section>
+
+      <section class="card">
+        <h2>Alertas de la pulsera</h2>
+        <ul id="alerts" class="list"><li class="muted">Sin alertas</li></ul>
+      </section>
+
+      <p class="muted small">Valores del sensor de la pulsera, no son un diagnóstico médico. TzindaApp no sustituye la atención médica ni los servicios de emergencia.</p>
+      <button id="logout" class="btn">Salir</button>
+    </section>
+  </main>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const storageKey = 'tzinda.sensor.key';
+    let key = '';
+    try { key = sessionStorage.getItem(storageKey) || ''; } catch {}
+    let source = null;
+    let last = null;
+    let staleTimer = null;
+    const series = [];
+
+    const api = async (path) => {
+      const r = await fetch(`/api/v1/sensor${path}${path.includes('?') ? '&' : '?'}key=${encodeURIComponent(key)}`);
+      if (r.status === 401 || r.status === 403) throw Object.assign(new Error('auth'), { auth: true });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || `Error ${r.status}`);
+      return r.json();
+    };
+    const ago = (iso) => {
+      const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+      return s < 60 ? `hace ${s} s` : s < 3600 ? `hace ${Math.round(s / 60)} min` : `hace ${Math.round(s / 3600)} h`;
+    };
+
+    function setStatus(online) {
+      $('#status').textContent = online ? 'En vivo' : 'Sin lecturas recientes';
+      $('#status').className = `pill ${online ? 'online' : 'offline'}`;
+    }
+
+    function drawChart() {
+      const svg = $('#chart');
+      const w = 700, h = 200, left = 40, right = 690, y0 = 10, bottom = 180;
+      const max = Math.max(2, ...series.map((p) => p.g));
+      const x = (i) => left + (i / 59) * (right - left);
+      const y = (g) => bottom - (g / max) * (bottom - y0);
+      const pts = series.map((p, i) => `${x(i + 60 - series.length).toFixed(1)},${y(p.g).toFixed(1)}`).join(' ');
+      const falls = series.map((p, i) => p.caida ? `<circle cx="${x(i + 60 - series.length)}" cy="${y(p.g)}" r="5" fill="var(--danger)"><title>Caída marcada por la pulsera</title></circle>` : '').join('');
+      const grid = [0, 1, 2, 3, 4].filter((g) => g <= max).map((g) =>
+        `<line x1="${left}" x2="${right}" y1="${y(g)}" y2="${y(g)}" stroke="var(--line)"/><text x="${left - 6}" y="${y(g) + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${g} g</text>`).join('');
+      svg.innerHTML = `${grid}<polyline points="${pts}" fill="none" stroke="var(--brand)" stroke-width="2.5" stroke-linejoin="round"/>${falls}`;
+    }
+
+    function render(r) {
+      last = r;
+      setStatus(true);
+      $('#subtitle').textContent = `Última lectura ${ago(r.hora)} · lectura #${r.id}`;
+      $('#bpm').textContent = r.dedo && r.pulso ? r.pulso : '—';
+      $('#spo2').textContent = r.dedo && r.spo2 ? r.spo2 : '—';
+      $('#mag').textContent = r.acelerometro.magnitud != null ? r.acelerometro.magnitud.toFixed(2) : '—';
+      $('#falls').textContent = r.caidas;
+      $('#fallsNote').textContent = r.caida ? '⚠️ caída marcada ahora' : 'desde que se encendió';
+      if (!r.dedo) $('#bpm').title = $('#spo2').title = 'Coloca el dedo en el sensor';
+      $('#sensors').textContent = `Sensor de pulso: ${r.sensores.pulso ? 'OK' : 'con error'} · Acelerómetro: ${r.sensores.acelerometro ? 'OK' : 'con error'}${r.dedo ? '' : ' · sin dedo en el sensor de pulso'}`;
+      series.push({ g: r.acelerometro.magnitud ?? 0, caida: r.caida });
+      if (series.length > 60) series.shift();
+      drawChart();
+      clearTimeout(staleTimer);
+      staleTimer = setTimeout(() => setStatus(false), 15000);
+    }
+
+    async function loadSide() {
+      try {
+        const s = await api('/resumen?minutos=60');
+        const items = [
+          `${s.lecturas} lecturas`,
+          s.pulso.promedio ? `Pulso promedio ${s.pulso.promedio} (de ${s.pulso.min} a ${s.pulso.max})` : 'Sin lecturas de pulso (no había dedo en el sensor)',
+          s.spo2.promedio ? `Oxigenación promedio ${s.spo2.promedio} % (mínima ${s.spo2.min} %)` : 'Sin lecturas de oxigenación',
+          `Movimiento máximo ${s.magnitudMax ?? '—'} g`,
+          `${s.caidas} caídas marcadas por la pulsera`,
+          `Sensores funcionando: pulso ${s.sensoresOk.pulso ?? '—'} %, acelerómetro ${s.sensoresOk.acelerometro ?? '—'} %`,
+        ];
+        $('#summary').replaceChildren(...items.map((t) => Object.assign(document.createElement('li'), { textContent: t })));
+        const a = await api('/alertas');
+        if (a.alertas.length) {
+          $('#alerts').replaceChildren(...a.alertas.slice(0, 5).map((al) => {
+            const li = document.createElement('li');
+            const link = Object.assign(document.createElement('a'), { href: al.url, textContent: `${al.status === 'resolved' ? '💚' : '🚨'} Posible caída · ${ago(al.createdAt)}` });
+            li.append(link, ` · ${al.status === 'active' ? 'sin respuesta' : al.status === 'acknowledged' ? `va ${al.acknowledgedBy.join(', ')}` : 'cerrada'}`);
+            return li;
+          }));
+        }
+      } catch (e) {
+        if (e.auth) logout();
+      }
+    }
+
+    async function start() {
+      if (!key) { $('#login').hidden = false; $('#panel').hidden = true; return; }
+      try {
+        const st = await api('');
+        $('#login').hidden = true;
+        $('#panel').hidden = false;
+        $('#person').textContent = st.personName;
+        if (st.ultimaLectura) {
+          const hist = await api('/lecturas?limit=60');
+          series.length = 0;
+          hist.lecturas.forEach((r) => series.push({ g: r.acelerometro.magnitud ?? 0, caida: r.caida }));
+          render(st.ultimaLectura);
+          setStatus(st.enLinea);
+        }
+        loadSide();
+        source?.close();
+        source = new EventSource(`/api/v1/sensor/stream?key=${encodeURIComponent(key)}`);
+        source.addEventListener('lectura', (ev) => {
+          const r = JSON.parse(ev.data);
+          if (!last || r.id > last.id) render(r);
+        });
+        source.addEventListener('alerta', () => loadSide());
+        source.onerror = () => setStatus(false);
+      } catch (e) {
+        if (e.auth) logout(); else $('#subtitle').textContent = e.message;
+      }
+    }
+
+    function logout() {
+      source?.close();
+      key = '';
+      try { sessionStorage.removeItem(storageKey); } catch {}
+      $('#login').hidden = false;
+      $('#panel').hidden = true;
+    }
+
+    $('#enter').addEventListener('click', () => {
+      key = $('#key').value.trim();
+      try { sessionStorage.setItem(storageKey, key); } catch {}
+      start();
+    });
+    $('#logout').addEventListener('click', logout);
+    setInterval(() => key && loadSide(), 30000);
+    start();
+  </script>
+</body>
+</html>

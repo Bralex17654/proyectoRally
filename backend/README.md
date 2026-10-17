@@ -24,7 +24,21 @@ TzindaApp API lista
 
 En la app: **Ajustes → Servidor TzindaApp (opcional)** → escribe esa URL y el nombre de la persona → **Conectar**. La laptop y el teléfono deben estar en la misma red Wi-Fi. Si no conecta, revisa que el Firewall de Windows permita Node.js en redes privadas.
 
-Configuración opcional: copia `.env.example` como `.env` (ver comentarios dentro).
+Configuración opcional: copia `.env.example` como `.env` (ver comentarios dentro). El archivo `.env` está en `.gitignore`: **nunca subas tu `DATABASE_URL` ni tu `ADMIN_KEY` a GitHub**.
+
+## Base de datos y pulsera física
+
+Con `DATABASE_URL` (PostgreSQL de Neon) en `.env`:
+
+- los datos de las APIs se guardan en el esquema `tzinda` (se crea solo al arrancar);
+- se leen en tiempo real las lecturas de la pulsera desde `public.lecturas` (no se modifica esa tabla);
+- cada caída que marca la pulsera crea una alerta con link para la familia.
+
+Al arrancar verás `Datos: PostgreSQL` y `Pulsera: leyendo public.lecturas`. El monitor en vivo está en `http://localhost:8080/sensor` y pide la `ADMIN_KEY` de `.env`.
+
+Para vincular a un familiar con la pulsera: `curl -X POST -H "x-admin-key: <ADMIN_KEY>" http://localhost:8080/api/v1/sensor/invite` y ese código se usa en `POST /api/v1/caregivers/me/devices`.
+
+Neon cobra por tiempo de cómputo activo: mientras el servidor corre consulta la base cada segundo (igual que la pulsera al escribir). Sube `SENSOR_POLL_MS` si quieres consultar menos seguido.
 
 ## Probar
 
@@ -32,7 +46,13 @@ Configuración opcional: copia `.env.example` como `.env` (ver comentarios dentr
 npm test
 ```
 
-Las 16 pruebas recorren las 5 APIs con un reloj falso: latido y teléfono sin reportarse, batería baja, alerta → ubicación → "Voy en camino" → cierre, escalada sin respuesta, configuración remota, códigos vencidos, estadísticas, comunidad y permisos entre usuarios.
+Prueba contra la base real (usa un esquema temporal que se borra al final y no escribe en `public.lecturas`):
+
+```bash
+npm run test:db
+```
+
+Las 24 pruebas recorren las 6 APIs (la pulsera con una simulada) con un reloj falso: latido y teléfono sin reportarse, batería baja, alerta → ubicación → "Voy en camino" → cierre, escalada sin respuesta, configuración remota, códigos vencidos, estadísticas, comunidad y permisos entre usuarios.
 
 ## Demo en 2 minutos
 
@@ -72,7 +92,11 @@ src/
   domain.js          vistas, estadísticas, utilidades
   auth.js            tokens (se guarda solo el hash) y permisos
   validation.js      validación de entradas
-  store.js           almacenamiento JSON
-public/              página del link (/a/:id) y panel comunitario (/c/:id)
+  store.js           almacenamiento JSON (sin base de datos)
+  pg-store.js        almacenamiento en PostgreSQL (esquema tzinda)
+  sensor.js          lectura en tiempo real de public.lecturas y resumen
+  sensor-link.js     pulsera como dispositivo + alertas por caída
+  routes/sensor.js   API 6 y transmisión en vivo (SSE)
+public/              página del link (/a/:id), panel comunitario (/c/:id) y monitor de la pulsera (/sensor)
 test/                pruebas con node:test
 ```
