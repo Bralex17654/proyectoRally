@@ -29,13 +29,22 @@ export const defaultConfig = () => ({
   callFirst: 2,
 });
 
+const isLocalHost = (host) => /^(localhost|127\.|\[::1\]|::1)/i.test(host ?? '');
+
 /**
- * URL base para links públicos: PUBLIC_URL o la del último request
- * (así el vigilante, que no tiene request, también arma links completos).
+ * URL base para los links que llegan por SMS: PUBLIC_URL o la dirección de red
+ * con la que llegó el último request (normalmente la del teléfono). Un request
+ * hecho desde la misma laptop (localhost) nunca la reemplaza: un link con
+ * "localhost" no abre en el celular de la familia.
  */
 export function publicBase(ctx, req) {
   if (ctx.config.publicUrl) return ctx.config.publicUrl;
-  if (req) ctx.lastBase = `${req.protocol}://${req.get('host')}`;
+  if (req) {
+    const host = req.get('host');
+    const base = `${req.protocol}://${host}`;
+    if (!isLocalHost(host)) ctx.lastBase = base;
+    return ctx.lastBase ?? base;
+  }
   return ctx.lastBase ?? '';
 }
 

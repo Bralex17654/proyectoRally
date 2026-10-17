@@ -267,3 +267,16 @@ describe('API de la pulsera (API 6)', () => {
     s.close();
   });
 });
+
+describe('links públicos', () => {
+  test('un request desde localhost no reemplaza la dirección de red del teléfono', async () => {
+    const { publicBase } = await import('../src/domain.js');
+    const ctx = { config: { publicUrl: '' }, lastBase: null };
+    const req = (host) => ({ protocol: 'http', get: () => host });
+    assert.equal(publicBase(ctx, req('192.168.120.204:8080')), 'http://192.168.120.204:8080');
+    assert.equal(publicBase(ctx, req('localhost:8080')), 'http://192.168.120.204:8080');
+    assert.equal(publicBase(ctx, req('127.0.0.1:8080')), 'http://192.168.120.204:8080');
+    assert.equal(publicBase(ctx), 'http://192.168.120.204:8080');
+    assert.equal(publicBase({ config: { publicUrl: 'https://tzinda.app' } }, req('localhost')), 'https://tzinda.app');
+  });
+});

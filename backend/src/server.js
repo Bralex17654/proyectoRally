@@ -37,6 +37,14 @@ if (pool && config.sensorEnabled) {
 }
 
 const { app, ctx } = createApp({ store, notifier, config, sensor });
+if (!config.publicUrl) {
+  const candidates = Object.entries(os.networkInterfaces())
+    .filter(([name]) => !/vethernet|virtual|vmware|vbox|hyper-v|loopback|bluetooth/i.test(name))
+    .sort(([a], [b]) => Number(/wi-?fi|wlan/i.test(b)) - Number(/wi-?fi|wlan/i.test(a)))
+    .flatMap(([, list]) => list ?? [])
+    .filter((i) => i.family === 'IPv4' && !i.internal);
+  if (candidates.length) ctx.lastBase = `http://${candidates[0].address}:${config.port}`;
+}
 if (sensor) {
   const device = ensureSensorDevice(ctx, {
     personName: config.sensorPersonName,

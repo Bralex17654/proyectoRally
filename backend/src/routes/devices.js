@@ -122,6 +122,7 @@ export function devicesRouter(ctx) {
     const device = getDevice(store, req.params.id);
     assertDeviceAccess(req.who, device, ['device']);
     const now = ctx.now();
+    publicBase(ctx, req);
     const pending = (device.commands ?? []).filter((c) => now - Date.parse(c.createdAt) < COMMAND_TTL_MS);
     device.lastCommandPollAt = iso(now);
     if (device.commands?.length) {
