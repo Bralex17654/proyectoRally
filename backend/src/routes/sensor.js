@@ -35,7 +35,9 @@ export function sensorRouter(ctx) {
     }
     const who = identify(store, req) ?? (key ? store.data.tokens[hashToken(key)] : null);
     if (!who) throw unauthorized('Usa la ADMIN_KEY o el token de un cuidador vinculado a la pulsera');
-    if (!canAccessDevice(who, sensorDevice())) throw forbidden('Ese token no está vinculado a la pulsera');
+    // Los teléfonos que suenan con la pulsera también pueden ver sus lecturas.
+    const companion = who.kind === 'device' && sensorCompanions(ctx).some((d) => d.id === who.id);
+    if (!companion && !canAccessDevice(who, sensorDevice())) throw forbidden('Ese token no está vinculado a la pulsera');
     req.who = who;
     next();
   };

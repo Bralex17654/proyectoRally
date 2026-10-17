@@ -216,6 +216,14 @@ describe('API de la pulsera (API 6)', () => {
 
     const st = await get('/api/v1/sensor', { 'x-admin-key': 'clave-admin' });
     assert.ok(st.body.telefonos.some((t) => t.id === reg.deviceId));
+
+    // El teléfono acompañante ve la pulsera (pico v7 incluido), pero no puede simular caídas.
+    const phoneAuth = { authorization: `Bearer ${reg.deviceToken}` };
+    const own = await get('/api/v1/sensor', phoneAuth);
+    assert.equal(own.status, 200);
+    assert.ok('pico' in own.body.ultimaLectura.acelerometro);
+    const sim = await fetch(`${base}/api/v1/sensor/simular-caida`, { method: 'POST', headers: phoneAuth });
+    assert.equal(sim.status, 403);
   });
 
   test('simular una caída hace sonar la alarma del teléfono sin tocar las lecturas', async () => {
