@@ -6,6 +6,7 @@ import { assertDeviceAccess, getDevice, issueToken, newId, requireAuth } from '.
 import { defaultConfig, deviceView, iso, logEvent, publicBase } from '../domain.js';
 import { badRequest } from '../errors.js';
 import { messages } from '../messages.js';
+import { COMMAND_TTL_MS } from '../sensor-link.js';
 import * as v from '../validation.js';
 
 /** API 1 (dispositivos y latido) + configuración remota e invitaciones (API 3). */
@@ -113,6 +114,21 @@ export function devicesRouter(ctx) {
     logEvent(ctx, device.id, 'config_updated', { by: req.who.kind, configVersion: device.configVersion });
     store.save();
     res.json({ configVersion: device.configVersion, config: device.config });
+  });
+
+  // El teléfono pregunta cada pocos segundos si la pulsera marcó una caída.
+  // Las órdenes se entregan una sola vez y caducan a los 2 minutos.
+  router.get('/devices/:id/commands', deviceOnly, (req, res) => {
+    const device = getDevice(store, req.params.id);
+    assertDeviceAccess(req.who, device, ['device']);
+    const now = ctx.now();
+    const pending = (device.commands ?? []).filter((c) => now - Date.parse(c.createdAt) < COMMAND_TTL_MS);
+    device.lastCommandPollAt = iso(now);
+    if (device.commands?.length) {
+      device.commands = [];
+      store.save();
+    }
+    res.json({ commands: pending, pollEverySeconds: 5 });
   });
 
   // Código de 6 dígitos para que un familiar o una comunidad se vincule.

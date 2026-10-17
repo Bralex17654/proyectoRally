@@ -76,6 +76,10 @@ class GuardianMonitorService : Service(), SensorEventListener {
     private var bestFix: Location? = null
     private var locationListener: LocationListener? = null
 
+    /** Alerta que el servidor ya creó por una caída de la pulsera: (id, link). */
+    private var sensorAlert: Pair<String, String>? = null
+    private var countdownLabel = "Posible caída"
+
     override fun onCreate() {
         super.onCreate()
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
@@ -119,6 +123,8 @@ class GuardianMonitorService : Service(), SensorEventListener {
         }
         handler.removeCallbacks(heartbeatTick)
         handler.post(heartbeatTick)
+        handler.removeCallbacks(commandsTick)
+        handler.post(commandsTick)
         return START_STICKY
     }
 
@@ -168,13 +174,14 @@ class GuardianMonitorService : Service(), SensorEventListener {
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
-    private fun beginCountdown() {
+    private fun beginCountdown(fromSensor: Boolean = false) {
         if (alertPending) return
         alertPending = true
         secondsLeft = countdownTotal
+        countdownLabel = if (fromSensor) "La pulsera detectó una posible caída" else "Posible caída"
         getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit().putBoolean(FLUTTER_PENDING_KEY, true).apply()
-        postAlertNotification("Posible caída · ¿estás bien? $secondsLeft s", showCancel = true)
-        updateMonitorNotification("Posible caída · revisión de $countdownTotal segundos")
+        postAlertNotification("$countdownLabel · ¿estás bien? $secondsLeft s", showCancel = true)
+        updateMonitorNotification("$countdownLabel · revisión de $countdownTotal segundos")
         // Se empieza a buscar GPS desde ya para tener una ubicación fresca si hay que avisar.
         startLocationUpdates()
         reportEvent("countdown_started", JSONObject().put("peak", peak))
@@ -192,7 +199,7 @@ class GuardianMonitorService : Service(), SensorEventListener {
                 (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(ALERT_NOTIFICATION_ID)
                 sendAlert()
             } else {
-                postAlertNotification("Posible caída · ¿estás bien? $secondsLeft s", showCancel = true)
+                postAlertNotification("$countdownLabel · ¿estás bien? $secondsLeft s", showCancel = true)
                 handler.postDelayed(this, 1_000L)
             }
         }
@@ -207,11 +214,23 @@ class GuardianMonitorService : Service(), SensorEventListener {
         updateMonitorNotification("Monitoreo activo · alerta cancelada")
         stopLocationUpdates()
         reportEvent("cancelled_by_user", JSONObject().put("peak", peak).put("secondsLeft", secondsLeft))
+        sensorAlert?.let { (alertId, _) ->
+            sensorAlert = null
+            io.execute { api.resolveAlert(alertId, "false_alarm") }
+        }
     }
 
     /** Primero se intenta crear la alerta en el servidor (máx. ~9 s) para incluir el link en el SMS. */
     private fun sendAlert() {
         val alertPeak = peak
+        sensorAlert?.let { (alertId, url) ->
+            sensorAlert = null
+            activeAlertId = alertId
+            knownAcks = 0
+            ackedBy = null
+            dispatchSms(link = url)
+            return
+        }
         if (!api.isConfigured) {
             dispatchSms(link = null)
             return
@@ -513,6 +532,34 @@ class GuardianMonitorService : Service(), SensorEventListener {
                 }
             }
             handler.postDelayed(this, api.heartbeatEveryMin * 60_000L)
+        }
+    }
+
+    /** Cada 5 s: ¿la pulsera marcó una caída? Entonces suena la misma alarma que con el sensor del teléfono. */
+    private val commandsTick = object : Runnable {
+        override fun run() {
+            if (!isRunning) return
+            if (api.isConfigured) {
+                io.execute {
+                    val commands = api.fetchCommands()
+                    if (commands != null && commands.length() > 0) handler.post { handleCommands(commands) }
+                }
+            }
+            handler.postDelayed(this, COMMANDS_EVERY_MS)
+        }
+    }
+
+    private fun handleCommands(commands: JSONArray) {
+        for (i in 0 until commands.length()) {
+            val command = commands.optJSONObject(i) ?: continue
+            if (command.optString("type") != "fall_alarm") continue
+            // Ya hay una cuenta regresiva o una alerta en curso: no se encima otra.
+            if (alertPending || activeAlertId != null) continue
+            val alertId = command.optString("alertId")
+            if (alertId.isBlank()) continue
+            sensorAlert = alertId to command.optString("url")
+            peak = 0.0
+            beginCountdown(fromSensor = true)
         }
     }
 
@@ -826,6 +873,7 @@ class GuardianMonitorService : Service(), SensorEventListener {
         private const val COOLDOWN_MS = 45_000L
         private const val DEFAULT_COUNTDOWN_S = 20
         private const val ALERT_TRACKING_MS = 15 * 60_000L
+        private const val COMMANDS_EVERY_MS = 5_000L
         private const val SMS_RESULT_TIMEOUT_MS = 30_000L
         private val smsRequestCode = java.util.concurrent.atomic.AtomicInteger(10_000)
     }

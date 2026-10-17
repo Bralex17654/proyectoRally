@@ -22,5 +22,7 @@ export const messages = {
     'Revisa que esté encendido y con Guardian activo.',
   backOnline: (device) => `📶 El teléfono de ${who(device.personName)} volvió a reportarse.`,
   lowBattery: (device, battery) => `🔋 El teléfono de ${who(device.personName)} tiene ${battery}% de batería. Ponlo a cargar.`,
+  sensorAccelError: (device) =>
+    `🔧 El acelerómetro de la pulsera de ${who(device.personName)} dejó de funcionar: mientras tanto no puede detectar caídas. Revisa sus cables.`,
   linked: (device, caregiverName) => `🔗 ${caregiverName} ahora recibe las alertas de ${who(device.personName)}.`,
 };

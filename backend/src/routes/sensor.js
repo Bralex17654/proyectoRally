@@ -4,7 +4,8 @@ import { Router } from 'express';
 
 import { canAccessDevice, hashToken, identify, sameSecret } from '../auth.js';
 import { alertSummary, iso, publicBase } from '../domain.js';
-import { HttpError, forbidden, unauthorized } from '../errors.js';
+import { HttpError, badRequest, forbidden, unauthorized } from '../errors.js';
+import { sensorCompanions, triggerSensorFall } from '../sensor-link.js';
 import * as v from '../validation.js';
 
 /**
@@ -39,6 +40,18 @@ export function sensorRouter(ctx) {
     next();
   };
 
+  // "escuchando" = el teléfono consultó sus órdenes en los últimos 30 s.
+  const phoneView = (d) => {
+    const polled = d.lastCommandPollAt ? Date.parse(d.lastCommandPollAt) : null;
+    return {
+      id: d.id,
+      personName: d.personName,
+      model: d.model,
+      ultimaConsulta: d.lastCommandPollAt ?? null,
+      escuchando: polled != null && ctx.now() - polled <= 30_000,
+    };
+  };
+
   const status = async () => {
     const { hub } = sensor();
     const last = (await hub.latest()) ?? null;
@@ -52,6 +65,7 @@ export function sensorRouter(ctx) {
       segundosDesdeUltima: seconds,
       ultimaLectura: last,
       totalLecturas: await hub.count(),
+      telefonos: sensorCompanions(ctx).map((d) => phoneView(d)),
     };
   };
 
@@ -77,6 +91,31 @@ export function sensorRouter(ctx) {
       .slice(0, 20)
       .map((a) => ({ ...alertSummary(a, base), sensor: a.sensor ?? null, resolution: a.resolution }));
     res.json({ alertas: alerts });
+  });
+
+  // Prueba del flujo completo sin escribir en la tabla de la pulsera: crea la
+  // alerta y hace sonar la alarma de los teléfonos igual que una caída real.
+  router.post('/sensor/simular-caida', access, async (req, res) => {
+    if (req.who.kind !== 'admin') throw forbidden('Solo con la ADMIN_KEY');
+    const { alert, url, phones } = await triggerSensorFall(ctx, sensorDevice(), {
+      detectedAt: iso(ctx.now()),
+      peak: null,
+      sensor: { simulada: true },
+    });
+    res.status(201).json({ alertId: alert.id, url, telefonos: phones.map((p) => p.id) });
+  });
+
+  // Qué teléfonos hacen sonar su alarma cuando la pulsera marca una caída
+  // (lista vacía = todos los teléfonos registrados).
+  router.put('/sensor/companions', access, (req, res) => {
+    if (req.who.kind !== 'admin') throw forbidden('Solo con la ADMIN_KEY');
+    const ids = req.body?.deviceIds;
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) throw badRequest('"deviceIds" debe ser una lista de ids');
+    const unknown = ids.filter((id) => !store.data.devices[id] || store.data.devices[id].kind === 'sensor');
+    if (unknown.length) throw badRequest(`No son teléfonos registrados: ${unknown.join(', ')}`);
+    store.data.settings.sensor.companions = ids;
+    store.save();
+    res.json({ telefonos: sensorCompanions(ctx).map((d) => phoneView(d)) });
   });
 
   // Código para que un familiar o una comunidad se vincule con la pulsera.

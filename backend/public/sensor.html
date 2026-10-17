@@ -46,6 +46,13 @@
       </section>
 
       <section class="card">
+        <h2>Teléfonos que suenan con la pulsera</h2>
+        <ul id="phones" class="list"><li class="muted">Ningún teléfono registrado</li></ul>
+        <button id="simulate" class="btn">Probar caída de la pulsera</button>
+        <p id="simulateResult" class="muted small"></p>
+      </section>
+
+      <section class="card">
         <h2>Alertas de la pulsera</h2>
         <ul id="alerts" class="list"><li class="muted">Sin alertas</li></ul>
       </section>
@@ -112,8 +119,18 @@
       staleTimer = setTimeout(() => setStatus(false), 15000);
     }
 
+    function renderPhones(phones) {
+      if (!phones?.length) return;
+      $('#phones').replaceChildren(...phones.map((p) => {
+        const li = document.createElement('li');
+        li.textContent = `${p.escuchando ? '🟢' : '⚪'} ${p.personName || p.model || p.id} · ${p.escuchando ? 'escuchando a la pulsera' : 'sin consultar (¿app cerrada o sin Wi-Fi?)'}`;
+        return li;
+      }));
+    }
+
     async function loadSide() {
       try {
+        renderPhones((await api('')).telefonos);
         const s = await api('/resumen?minutos=60');
         const items = [
           `${s.lecturas} lecturas`,
@@ -180,6 +197,24 @@
       start();
     });
     $('#logout').addEventListener('click', logout);
+    $('#simulate').addEventListener('click', async () => {
+      const ok = confirm('Esto hace sonar la alarma "¿Estás bien?" en los teléfonos vinculados.
+
+Si nadie toca "Estoy bien" en 20 segundos, el teléfono MANDA SMS REALES y LLAMA a los contactos.
+
+¿Continuar?');
+      if (!ok) return;
+      try {
+        const r = await fetch(`/api/v1/sensor/simular-caida?key=${encodeURIComponent(key)}`, { method: 'POST' });
+        const body = await r.json();
+        $('#simulateResult').textContent = r.ok
+          ? `Caída simulada. ${body.telefonos.length} teléfono(s) recibirán la alarma en unos 5 segundos.`
+          : (body.message || `Error ${r.status}`);
+        loadSide();
+      } catch (e) {
+        $('#simulateResult').textContent = e.message;
+      }
+    });
     setInterval(() => key && loadSide(), 30000);
     start();
   </script>

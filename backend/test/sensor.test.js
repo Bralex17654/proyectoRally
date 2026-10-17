@@ -180,6 +180,63 @@ describe('API de la pulsera (API 6)', () => {
     assert.match(list.body.alertas[0].url, /^https:\/\/tzinda\.test\/a\/al_/);
   });
 
+  test('el teléfono de la persona recibe la orden de hacer sonar su alarma', async () => {
+    // Un teléfono registrado en el servidor.
+    const reg = await (await fetch(`${base}/api/v1/devices`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ personName: 'Doña Lupe', model: 'samsung SM-A256E' }),
+    })).json();
+    const poll = async () => {
+      const res = await fetch(`${base}/api/v1/devices/${reg.deviceId}/commands`, { headers: { authorization: `Bearer ${reg.deviceToken}` } });
+      return (await res.json()).commands;
+    };
+    assert.deepEqual(await poll(), []);
+
+    clock += 200_000; // pasa el tiempo de espera entre alertas
+    await hub.push(formatReading(row(20, { caida: 0, caidas: 2 })), formatReading(row(21, { caida: 1, caidas: 3 })));
+    const commands = await poll();
+    assert.equal(commands.length, 1);
+    assert.equal(commands[0].type, 'fall_alarm');
+    const alert = ctx.store.data.alerts[commands[0].alertId];
+    assert.equal(alert.source, 'sensor');
+    assert.equal(commands[0].url, `https://tzinda.test/a/${alert.id}`);
+    assert.deepEqual(await poll(), [], 'la orden se entrega una sola vez');
+
+    // Una orden vieja (el teléfono estuvo apagado) ya no hace sonar la alarma.
+    clock += 200_000;
+    await hub.push(formatReading(row(22, { caida: 1, caidas: 4 })));
+    clock += 130_000;
+    assert.deepEqual(await poll(), []);
+
+    const st = await get('/api/v1/sensor', { 'x-admin-key': 'clave-admin' });
+    assert.ok(st.body.telefonos.some((t) => t.id === reg.deviceId));
+  });
+
+  test('simular una caída hace sonar la alarma del teléfono sin tocar las lecturas', async () => {
+    const denied = await fetch(`${base}/api/v1/sensor/simular-caida`, { method: 'POST' });
+    assert.equal(denied.status, 401);
+    const before = (await hub.readings({ limit: 1000 })).length;
+    const res = await fetch(`${base}/api/v1/sensor/simular-caida`, { method: 'POST', headers: { 'x-admin-key': 'clave-admin' } });
+    assert.equal(res.status, 201);
+    const body = await res.json();
+    assert.ok(body.telefonos.length >= 1);
+    assert.equal(ctx.store.data.alerts[body.alertId].sensor.simulada, true);
+    const phone = ctx.store.data.devices[body.telefonos.at(0)];
+    assert.ok(phone.commands.some((c) => c.alertId === body.alertId));
+    assert.equal((await hub.readings({ limit: 1000 })).length, before);
+  });
+
+  test('avisa una vez si el acelerómetro de la pulsera falla', async () => {
+    notifier.sent.length = 0;
+    await hub.push(formatReading(row(30, { mpu_ok: 0, mpu_err: 1, mag_g: '0.000' })), formatReading(row(31, { mpu_ok: 0, mpu_err: 1 })));
+    await hub.push(formatReading(row(32, { mpu_ok: 0, mpu_err: 1 })));
+    assert.equal(notifier.sent.filter((n) => n.kind === 'sensor_error').length, 1);
+    assert.match(notifier.sent.find((n) => n.kind === 'sensor_error').text, /acelerómetro de la pulsera de Doña Lupe dejó de funcionar/);
+    await hub.push(formatReading(row(33)));
+    assert.ok(ctx.store.data.events.some((e) => e.type === 'sensor_accel_ok'));
+  });
+
   test('las lecturas cuentan como latido del dispositivo', async () => {
     const device = ctx.store.data.devices[ctx.sensor.deviceId];
     assert.equal(device.lastHeartbeat.source, 'sensor');

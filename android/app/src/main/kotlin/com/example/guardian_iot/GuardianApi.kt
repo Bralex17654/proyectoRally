@@ -109,6 +109,11 @@ class GuardianApi(context: Context) {
 
     fun createInvite(): JSONObject? = request("POST", "/api/v1/devices/$deviceId/invite", JSONObject())
 
+    /** Órdenes pendientes del servidor, p. ej. "la pulsera marcó una caída". */
+    fun fetchCommands(): JSONArray? =
+        request("GET", "/api/v1/devices/$deviceId/commands", null, connectTimeoutMs = 3000, readTimeoutMs = 4000)
+            ?.optJSONArray("commands")
+
     private fun request(
         method: String,
         pathOrUrl: String,

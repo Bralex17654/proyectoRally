@@ -191,6 +191,12 @@ Acceso: header `X-Admin-Key` (la ADMIN_KEY del servidor) o el token de un famili
 | `GET` | `/sensor/stream` | Transmisión en vivo (Server-Sent Events): evento `lectura` por cada fila nueva y `alerta` si la pulsera marca una caída |
 | `GET` | `/sensor/alertas` | Últimas 20 alertas de la pulsera con su link |
 | `POST` | `/sensor/invite` | Solo con ADMIN_KEY: código de 6 dígitos para vincular a un familiar o comunidad |
+| `POST` | `/sensor/simular-caida` | Solo con ADMIN_KEY: prueba del flujo completo sin escribir en `lecturas` (crea la alerta y hace sonar los teléfonos) |
+| `PUT` | `/sensor/companions` | Solo con ADMIN_KEY: `{ "deviceIds": [...] }` = qué teléfonos suenan con la pulsera (vacío = todos) |
+
+**La pulsera hace sonar el teléfono.** Cuando la pulsera marca una caída, además de crear la alerta, el servidor deja una orden `fall_alarm` para los teléfonos vinculados. La app la recoge con `GET /devices/:id/commands` (cada 5 s, token del teléfono; cada orden se entrega una vez y caduca a los 2 minutos) y hace lo mismo que con su propio sensor: alarma "¿Estás bien?" con cuenta regresiva. "Estoy bien" cierra la alerta como falsa alarma; si nadie responde, el teléfono manda los SMS con el link de esa misma alerta y llama. `GET /sensor` muestra en `telefonos[].escuchando` si cada teléfono está consultando.
+
+Si el acelerómetro de la pulsera falla (`mpu_ok = 0`), el servidor avisa una vez a la familia: sin él no se detectan caídas.
 
 Una lectura:
 
